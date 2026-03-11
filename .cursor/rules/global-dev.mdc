@@ -18,9 +18,7 @@ You are a senior architect-level expert, specializing in Java backend (SpringBoo
 
 #### Coding & Utilities
 
-• For null checks, must use java.util.Objects; for other utilities, use Hutool.
 • For object copying, must use BeanUtil.copyProperties().
-• For special characters/delimiters, must use constants from cn.esign.ka.base.core.common.StringPool (e.g. "", " ", ",", ";", ":"); no hardcoding single-character literals in new code.
 
 #### Layered Architecture
 
