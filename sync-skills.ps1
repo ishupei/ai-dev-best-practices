@@ -1,9 +1,9 @@
-﻿# ============================================================
+# ============================================================
 # AI Skills & Rules 同步脚本 (PowerShell)
 # 用法: .\sync-skills.ps1 [-Target <项目路径|all>] [-Register <项目路径>] [-List]
 #
 # 功能:
-#   1. 同步 Claude Code commands 到全局 (~/.claude/commands/)
+#   1. 同步 Claude Code skills（目录）到全局 (~/.claude/skills/)
 #   2. 同步 Cursor skills 到全局 (~/.cursor/skills/)
 #   3. 同步 Cursor skills/rules 到指定项目
 #
@@ -32,26 +32,37 @@ function Log-Ok($msg)   { Write-Host "[OK]   $msg" -ForegroundColor Green }
 function Log-Warn($msg) { Write-Host "[WARN] $msg" -ForegroundColor Yellow }
 function Log-Err($msg)  { Write-Host "[ERR]  $msg" -ForegroundColor Red }
 
-# ---- 1. 同步 Claude Code 全局命令 ----
+# ---- 1. 同步 Claude Code 全局 skills（.claude/skills/<name>/SKILL.md）----
 function Sync-ClaudeGlobal {
-    $claudeCmdDir = Join-Path $env:USERPROFILE ".claude\commands"
-    if (-not (Test-Path $claudeCmdDir)) {
-        New-Item -ItemType Directory -Path $claudeCmdDir -Force | Out-Null
+    $claudeSkillsGlobal = Join-Path $env:USERPROFILE ".claude\skills"
+    if (-not (Test-Path $claudeSkillsGlobal)) {
+        New-Item -ItemType Directory -Path $claudeSkillsGlobal -Force | Out-Null
     }
 
     Write-Host ""
-    Write-Host "=== 同步 Claude Code 全局命令 ==="
+    Write-Host "=== 同步 Claude Code 全局 Skills（目录）==="
 
-    $sourceCommands = Join-Path $SourceDir ".claude\commands"
+    $sourceSkills = Join-Path $SourceDir ".claude\skills"
     $count = 0
 
-    Get-ChildItem -Path $sourceCommands -Filter "*.md" -ErrorAction SilentlyContinue | ForEach-Object {
-        Copy-Item $_.FullName -Destination (Join-Path $claudeCmdDir $_.Name) -Force
-        Log-Ok "  $($_.Name)"
+    if (-not (Test-Path $sourceSkills -PathType Container)) {
+        Log-Warn "未找到 $sourceSkills，跳过 Claude 同步"
+        return
+    }
+
+    Get-ChildItem -Path $sourceSkills -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $skillName = $_.Name
+        $srcSkillMd = Join-Path $_.FullName "SKILL.md"
+        if (-not (Test-Path $srcSkillMd)) { return }
+
+        $destDir = Join-Path $claudeSkillsGlobal $skillName
+        New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+        Copy-Item -LiteralPath $srcSkillMd -Destination (Join-Path $destDir "SKILL.md") -Force
+        Log-Ok "  $skillName/SKILL.md"
         $count++
     }
 
-    Write-Host "  共同步 $count 个命令到 $claudeCmdDir"
+    Write-Host "  共同步 $count 个技能目录到 $claudeSkillsGlobal"
 }
 
 # ---- 2. 同步 Cursor skills 到全局 ----

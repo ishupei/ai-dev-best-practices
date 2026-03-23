@@ -4,7 +4,7 @@
 # 用法: bash sync-skills.sh [--target <项目路径>]
 #
 # 功能:
-#   1. 同步 Claude Code commands 到全局 (~/.claude/commands/)
+#   1. 同步 Claude Code skills（目录）到全局 (~/.claude/skills/)
 #   2. 同步 Cursor skills/rules 到指定项目（通过 symlink）
 #
 # 示例:
@@ -31,24 +31,33 @@ log_ok()   { echo -e "${GREEN}[OK]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_err()  { echo -e "${RED}[ERR]${NC} $1"; }
 
-# ---- 1. 同步 Claude Code 全局命令 ----
+# ---- 1. 同步 Claude Code 全局 skills（.claude/skills/<name>/SKILL.md）----
 sync_claude_global() {
-    local claude_cmd_dir="$HOME/.claude/commands"
-    mkdir -p "$claude_cmd_dir"
+    local claude_skills_global="$HOME/.claude/skills"
+    mkdir -p "$claude_skills_global"
 
     echo ""
-    echo "=== 同步 Claude Code 全局命令 ==="
+    echo "=== 同步 Claude Code 全局 Skills（目录）==="
+
+    local src_skills="$SOURCE_DIR/.claude/skills"
+    if [ ! -d "$src_skills" ]; then
+        log_warn "未找到 $src_skills，跳过 Claude 同步"
+        return
+    fi
 
     local count=0
-    for f in "$SOURCE_DIR/.claude/commands/"*.md; do
-        [ -f "$f" ] || continue
-        local fname=$(basename "$f")
-        cp "$f" "$claude_cmd_dir/$fname"
-        log_ok "  $fname"
-        ((count++))
+    for d in "$src_skills"/*/; do
+        [ -d "$d" ] || continue
+        local skill_name=$(basename "$d")
+        [ -f "$d/SKILL.md" ] || continue
+        local dest_dir="$claude_skills_global/$skill_name"
+        mkdir -p "$dest_dir"
+        cp "$d/SKILL.md" "$dest_dir/SKILL.md"
+        log_ok "  $skill_name/SKILL.md"
+        ((count++)) || true
     done
 
-    echo "  共同步 $count 个命令到 $claude_cmd_dir"
+    echo "  共同步 $count 个技能目录到 $claude_skills_global"
 }
 
 # ---- 2. 同步 Cursor skills/rules 到目标项目 ----

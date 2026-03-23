@@ -1,12 +1,19 @@
+---
+name: ai-push
+description: "暂存、提交并推送代码到远程仓库。当用户输入 /ai-push 时触发。自动完成 pull → add → commit → push 全流程。"
+---
+
 # Git 提交推送助手
 
 此技能用于将当前工作区的变更**一键完成暂存、提交并推送到远程仓库**，自动处理 pull → add → commit → push 全流程。
 
-## Commit message 来源（按优先级）
+## Usage
 
-1. 用户在命令后附带了文本（如 `/ai-push fix: 修复了若干问题`）→ 直接使用该文本作为 commit message。
-2. 当前对话上下文中已有 `/ai-commit` 生成的 commit message → 使用该消息。
-3. 以上均无 → 按照 `/ai-commit` 的规则自动生成 commit message。
+- 当用户输入以 `/ai-push` 开头时，**MUST** 触发此技能。
+- Commit message 来源（按优先级）：
+  1. 用户在 `/ai-push` 后附带了文本（如 `/ai-push fix: 修复了若干问题`）→ 直接使用该文本作为 commit message。
+  2. 当前对话上下文中已有 `/ai-commit` 生成的 commit message → 使用该消息。
+  3. 以上均无 → 按照 `/ai-commit` 的规则自动生成 commit message（参考 ai-commit skill 的格式规范）。
 
 ## Role & Scope
 
@@ -30,7 +37,7 @@
 
 ### Step 3：确定 commit message
 
-- 按优先级规则确定 commit message。
+- 按 Usage 中的优先级规则确定 commit message。
 - 如果需要自动生成，**MUST** 遵循以下格式：
   - Subject line：`<type>: <summary>`，标准 type（`feat`/`fix`/`chore`/`docs`/`refactor`/`style`/`test` 等），中文摘要至多 30 字。
   - Body（可选）：使用 `//1.` `//2.` … 编号，最多 5 条，不列文件路径。
@@ -53,9 +60,32 @@
 
 - 输出推送结果：
   ```
-  推送完成
+  ✅ 推送完成
 
-  分支：<branch-name>
-  Commit：<commit message subject line>
-  变更：X 个文件，+Y/-Z 行
+  📌 分支：<branch-name>
+  📝 Commit：<commit message subject line>
+  📊 变更：X 个文件，+Y/-Z 行
   ```
+
+## 示例
+
+**带 commit message 调用：**
+```
+/ai-push feat: 新增用户登录认证逻辑
+```
+
+**不带 message，使用上下文或自动生成：**
+```
+/ai-push
+```
+
+## Checklist
+
+- [ ] 用户输入以 `/ai-push` 开头，已触发本技能
+- [ ] 已确认当前分支为预期目标分支
+- [ ] 已执行 `git pull` 拉取最新代码，无冲突
+- [ ] Commit message 已确定（用户指定 / 上下文 / 自动生成）
+- [ ] Commit message 已向用户展示并获得确认
+- [ ] 已暂存变更文件，未包含敏感文件
+- [ ] 已执行 `git commit` 和 `git push`
+- [ ] 已输出完成报告
