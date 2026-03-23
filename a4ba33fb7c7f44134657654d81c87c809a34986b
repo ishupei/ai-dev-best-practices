@@ -1,0 +1,49 @@
+.cursor/skills/ai-plan/SKILL.md
+  51c6f64d330f1dbd 16,51,64,154
+.cursor/skills/ai-bug/SKILL.md
+  51c6f64d330f1dbd 3,17,23-45,53,87-89,156,161
+sync-skills.ps1
+  51c6f64d330f1dbd 6,35,37-39,43,45,48-61,65
+.cursor/skills/ai-task/SKILL.md
+  51c6f64d330f1dbd 16,53,66-67,116
+docs/SKILLS-Claude开发规范.md
+  51c6f64d330f1dbd 1-50
+.cursor/skills/ai-do/SKILL.md
+  51c6f64d330f1dbd 16
+.cursor/skills/ai-draft/SKILL.md
+  51c6f64d330f1dbd 15-21,44,128
+sync-skills.sh
+  51c6f64d330f1dbd 7,34,36-37,40,42-46,49-57,60
+.cursor/skills/ai-summary/SKILL.md
+  51c6f64d330f1dbd 1-130
+.cursor/skills/ai-design/SKILL.md
+  51c6f64d330f1dbd 3,44,122
+.content/project-structure.md
+  51c6f64d330f1dbd 4-5,18
+.claude/commands/README.md
+  51c6f64d330f1dbd 1-8
+README.md
+  51c6f64d330f1dbd 10-21,23,32,39-40,59-61,77,82,160
+.cursor/skills/ai-clear/SKILL.md
+  51c6f64d330f1dbd 14,16,38-47,49-57,67,83-84,91,94-95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "a4ba33fb7c7f44134657654d81c87c809a34986b",
+  "prompts": {
+    "51c6f64d330f1dbd": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "9727d00b-368d-4479-836b-30e6a7478ed3",
+        "model": "default"
+      },
+      "human_author": "jiming <jiming@tsign.cn>",
+      "messages": [],
+      "total_additions": 581,
+      "total_deletions": 208,
+      "accepted_lines": 520,
+      "overriden_lines": 1
+    }
+  }
+}
