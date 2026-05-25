@@ -1,4 +1,4 @@
-﻿---
+---
 description: "self-project-rules (project scope)"
 globs: ["**/*.java", "**/pom.xml", "**/*.yml", "**/*.yaml", "**/*.properties"]
 alwaysApply: true
@@ -19,10 +19,10 @@ alwaysApply: true
 
 ## 1.4 Design Phase
 
-• Input starts with `#design` → **MUST** invoke `design-phase` skill; **MUST** follow `.cursor/skills/design-phase/SKILL.md` (steps 1–4 and Usage checklist).
+• Input starts with `#design` → **MUST** invoke `design-phase` skill; **MUST** follow `skills/design-phase/SKILL.md` (steps 1–4 and Usage checklist).
 • **MUST NOT** implement code for that feature until a complete design document exists in `docs/` (Markdown, per template).
 
 ## 1.5 Git Commit
 
-• Input starts with `#commit` → **MUST** invoke `git-commit` skill; **MUST** follow `.cursor/skills/git-commit/SKILL.md` format and constraints.
+• Input starts with `#commit` → **MUST** invoke `git-commit` skill; **MUST** follow `skills/git-commit/SKILL.md` format and constraints.
 • **MUST NOT** run any git commands or modify working tree/staging; **MUST** output only the Chinese commit message text.

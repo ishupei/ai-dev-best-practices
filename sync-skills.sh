@@ -4,11 +4,11 @@
 # 用法: bash sync-skills.sh [--target <项目路径>]
 #
 # 功能:
-#   1. 同步 Claude Code skills（目录）到全局 (~/.claude/skills/)
-#   2. 同步 Cursor skills/rules 到指定项目（通过 symlink）
+#   1. 从中心仓库 skills/ 同步 Claude Code skills 到全局 (~/.claude/skills/)
+#   2. 从中心仓库 skills/ 与 rules/ 同步到目标项目（Cursor / Trae）
 #
 # 示例:
-#   bash sync-skills.sh                          # 仅同步 Claude Code 全局
+#   bash sync-skills.sh                          # 同步 Claude Code 全局
 #   bash sync-skills.sh --target ~/my-project    # 同步到指定项目
 #   bash sync-skills.sh --target all             # 同步到所有已注册项目
 # ============================================================
@@ -31,15 +31,15 @@ log_ok()   { echo -e "${GREEN}[OK]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_err()  { echo -e "${RED}[ERR]${NC} $1"; }
 
-# ---- 1. 同步 Claude Code 全局 skills（.claude/skills/<name>/SKILL.md）----
+# ---- 1. 从中心仓库同步 Claude Code 全局 skills ----
 sync_claude_global() {
     local claude_skills_global="$HOME/.claude/skills"
     mkdir -p "$claude_skills_global"
 
     echo ""
-    echo "=== 同步 Claude Code 全局 Skills（目录）==="
+    echo "=== 同步 Claude Code 全局 Skills ==="
 
-    local src_skills="$SOURCE_DIR/.claude/skills"
+    local src_skills="$SOURCE_DIR/skills"
     if [ ! -d "$src_skills" ]; then
         log_warn "未找到 $src_skills，跳过 Claude 同步"
         return
@@ -51,9 +51,10 @@ sync_claude_global() {
         local skill_name=$(basename "$d")
         [ -f "$d/SKILL.md" ] || continue
         local dest_dir="$claude_skills_global/$skill_name"
-        mkdir -p "$dest_dir"
-        cp "$d/SKILL.md" "$dest_dir/SKILL.md"
-        log_ok "  $skill_name/SKILL.md"
+        rm -rf "$dest_dir"
+        mkdir -p "$claude_skills_global"
+        cp -R "$d" "$dest_dir"
+        log_ok "  $skill_name"
         ((count++)) || true
     done
 
@@ -61,7 +62,7 @@ sync_claude_global() {
 }
 
 # ---- 2. 同步 Cursor skills/rules 到目标项目 ----
-sync_cursor_to_project() {
+sync_project_targets() {
     local target="$1"
 
     # 展开 ~ 路径
@@ -73,11 +74,11 @@ sync_cursor_to_project() {
     fi
 
     echo ""
-    echo "=== 同步 Cursor 到: $target ==="
+    echo "=== 同步项目配置到: $target ==="
 
     # 同步 skills（使用 symlink 指向中心仓库）
     local target_skills="$target/.cursor/skills"
-    local source_skills="$SOURCE_DIR/.cursor/skills"
+    local source_skills="$SOURCE_DIR/skills"
 
     if [ -d "$source_skills" ]; then
         # 如果目标是普通目录（非 symlink），先备份
@@ -95,20 +96,20 @@ sync_cursor_to_project() {
 
         # 创建 symlink
         ln -s "$source_skills" "$target_skills"
-        log_ok "skills -> $source_skills"
+        log_ok "cursor skills -> $source_skills"
     fi
 
-    # 同步 rules（逐文件 symlink，保留项目自有 rules）
+    # 同步 cursor rules（逐文件 symlink，保留项目自有 rules）
     local target_rules="$target/.cursor/rules"
-    local source_rules="$SOURCE_DIR/.cursor/rules"
+    local source_rules="$SOURCE_DIR/rules"
 
     if [ -d "$source_rules" ]; then
         mkdir -p "$target_rules"
 
-        for f in "$source_rules/"*.mdc; do
+        for f in "$source_rules/"*.md; do
             [ -f "$f" ] || continue
-            local fname=$(basename "$f")
-            local target_file="$target_rules/$fname"
+            local fname=$(basename "$f" .md)
+            local target_file="$target_rules/$fname.mdc"
 
             # 如果目标已有同名非 symlink 文件，跳过（项目自有规则优先）
             if [ -f "$target_file" ] && [ ! -L "$target_file" ]; then
@@ -118,7 +119,27 @@ sync_cursor_to_project() {
 
             [ -L "$target_file" ] && rm "$target_file"
             ln -s "$f" "$target_file"
-            log_ok "rules/$fname -> 中心仓库"
+            log_ok "cursor rules/$fname.mdc -> 中心仓库"
+        done
+    fi
+
+    # 同步 trae skills
+    local target_trae_skills="$target/.trae/skills"
+    if [ -d "$source_skills" ]; then
+        mkdir -p "$target/.trae"
+        rm -rf "$target_trae_skills"
+        cp -R "$source_skills" "$target_trae_skills"
+        log_ok "trae skills -> $target_trae_skills"
+    fi
+
+    # 同步 trae rules
+    local target_trae_rules="$target/.trae/rules"
+    if [ -d "$source_rules" ]; then
+        mkdir -p "$target_trae_rules"
+        for f in "$source_rules/"*.md; do
+            [ -f "$f" ] || continue
+            cp "$f" "$target_trae_rules/$(basename "$f")"
+            log_ok "trae rules/$(basename "$f") -> 中心仓库"
         done
     fi
 }
@@ -146,7 +167,7 @@ sync_all_registered() {
 
     while IFS= read -r project; do
         [ -z "$project" ] && continue
-        sync_cursor_to_project "$project"
+        sync_project_targets "$project"
     done < "$REGISTRY_FILE"
 }
 
@@ -157,7 +178,7 @@ main() {
     echo "  中心仓库: $SOURCE_DIR"
     echo "============================================"
 
-    # 始终同步 Claude Code 全局命令
+    # 始终同步 Claude Code 全局 skills
     sync_claude_global
 
     # 解析参数
@@ -168,7 +189,7 @@ main() {
                 if [ "$1" = "all" ]; then
                     sync_all_registered
                 else
-                    sync_cursor_to_project "$1"
+                    sync_project_targets "$1"
                 fi
                 shift
                 ;;

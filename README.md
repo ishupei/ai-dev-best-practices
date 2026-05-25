@@ -1,45 +1,35 @@
 # AI Dev Best Practices
 
-AI 辅助开发技能体系 —— 统一管理 Claude Code / Cursor / Trae 的 Skills 和 Rules，一处维护，多项目同步。
+AI 辅助开发技能体系，使用统一 `skills/` 与 `rules/` 目录管理 Claude Code / Cursor / Trae 的能力定义，一处维护，多项目同步。
 
 ## 项目结构
 
-```
+```text
 ai-dev-best-practices/
+├── skills/                 # 唯一技能源目录
+│   ├── ai-bug/SKILL.md
+│   ├── ai-clear/SKILL.md
+│   ├── ai-commit/SKILL.md
+│   ├── ai-design/SKILL.md
+│   ├── ai-do/SKILL.md
+│   ├── ai-draft/SKILL.md
+│   ├── ai-plan/SKILL.md
+│   ├── ai-push/SKILL.md
+│   ├── ai-summary/SKILL.md
+│   ├── ai-task/SKILL.md
+│   ├── design-phase/SKILL.md
+│   └── git-commit/SKILL.md
+├── rules/                  # 唯一规则源目录
+│   ├── global-dev.md
+│   ├── self-project.md
+│   └── work-project.md
 ├── .claude/
-│   ├── skills/             # Claude Code Skills（/ai-xxx，目录形式，与官方一致）
-│   │   ├── ai-bug/SKILL.md
-│   │   ├── ai-clear/SKILL.md
-│   │   ├── ai-commit/SKILL.md
-│   │   ├── ai-design/SKILL.md
-│   │   ├── ai-do/SKILL.md
-│   │   ├── ai-draft/SKILL.md
-│   │   ├── ai-plan/SKILL.md
-│   │   ├── ai-push/SKILL.md
-│   │   ├── ai-summary/SKILL.md
-│   │   └── ai-task/SKILL.md
-│   └── commands/README.md  # 已弃用扁平命令，见文内说明
-├── .cursor/
-│   ├── skills/             # Cursor 技能（/ai-xxx 触发，与 .claude/skills 同源维护）
-│   │   ├── ai-bug/SKILL.md
-│   │   ├── ai-clear/SKILL.md
-│   │   ├── ai-commit/SKILL.md
-│   │   ├── ai-design/SKILL.md
-│   │   ├── ai-do/SKILL.md
-│   │   ├── ai-draft/SKILL.md
-│   │   ├── ai-plan/SKILL.md
-│   │   ├── ai-push/SKILL.md
-│   │   ├── ai-summary/SKILL.md
-│   │   └── ai-task/SKILL.md
-│   └── rules/              # Cursor 规则（自动应用）
-│       ├── global-dev.mdc  #   全局开发规范
-│       ├── self-project.mdc#   个人项目规范
-│       └── work-project.mdc#   工作项目规范
-├── .trae/                  # Trae 配置（rules + skills）
+│   └── commands/README.md
+├── .trae/                  # Trae 配置目录
 ├── docs/
-│   └── SKILLS-Claude开发规范.md  # Claude / Cursor 技能目录约定
-├── sync-skills.ps1         # 同步脚本 (Windows PowerShell)
-├── sync-skills.sh          # 同步脚本 (macOS/Linux Bash)
+│   └── SKILLS-Claude开发规范.md
+├── sync-skills.ps1
+├── sync-skills.sh
 └── README.md
 ```
 
@@ -58,103 +48,50 @@ ai-dev-best-practices/
 | `/ai-push` | Git 提交推送 | 准备推送时 |
 | `/ai-summary` | 上下文摘要写入 SUMMARY.md | 长对话或新开窗口前 |
 
-**Claude Code 技能目录约定**（扁平 `commands` 已弃用）：见 `docs/SKILLS-Claude开发规范.md`。
+统一约定见 `docs/SKILLS-Claude开发规范.md`。
 
 ## 同步工具使用
 
-提供 PowerShell (Windows) 和 Bash (macOS/Linux) 两个版本，功能完全一致。
-
 | 环境 | 脚本 |
 |------|------|
-| Windows | `sync-skills.ps1` (PowerShell) |
-| macOS / Linux | `sync-skills.sh` (Bash) |
+| Windows | `sync-skills.ps1` |
+| macOS / Linux | `sync-skills.sh` |
 
 ### 同步原理
 
-```
+```text
 ai-dev-best-practices/（中心仓库，唯一维护点）
 │
-├── .claude/skills/<name>/SKILL.md ── 复制 ──> ~/.claude/skills/<name>/  (Claude Code 全局生效，保持目录结构)
-├── .cursor/skills/*      ── 链接 ──> 项目/.cursor/skills/     (Cursor symlink)
-└── .cursor/rules/*.mdc   ── 链接 ──> 项目/.cursor/rules/*.mdc (Cursor 逐文件 symlink)
+├── skills/<name>/SKILL.md  ── 复制 ──> ~/.claude/skills/<name>/   (Claude Code 全局生效)
+├── skills/*                ── 复制/链接 ──> 项目/.cursor/skills/  (Cursor 项目生效)
+└── rules/*.md              ── 转换/链接 ──> 项目/.cursor/rules/*.mdc
 ```
 
-- **Claude Code**：将 `.claude/skills/` 下各技能目录复制到 `~/.claude/skills/`，所有项目自动生效（与官方「目录型 Skill」一致）
-- **Cursor**：通过符号链接指向中心仓库，更新即时生效，无需重复复制
-- **项目自有规则优先**：目标项目已有同名 rules 文件（非 symlink）不会被覆盖
+- `skills/` 是所有技能的唯一源目录
+- `rules/` 是所有规则的唯一源目录
+- Cursor 项目规则会从 `.md` 统一映射为 `.mdc`
 
 ### 命令参考
 
-#### Windows (PowerShell - 以管理员身份运行)
-
 ```powershell
-# 1. 仅同步 Claude Code 全局命令
 .\sync-skills.ps1
-
-# 2. 注册项目（记录路径，后续可批量同步）
 .\sync-skills.ps1 -Register D:\work\my-project
-
-# 3. 同步到指定项目（Claude Code 全局 + 该项目的 Cursor）
 .\sync-skills.ps1 -Target D:\work\my-project
-
-# 4. 同步到所有已注册项目
 .\sync-skills.ps1 -Target all
-
-# 5. 查看已注册项目列表
 .\sync-skills.ps1 -List
-
-# 6. 查看帮助
-.\sync-skills.ps1 -Help
 ```
 
-#### macOS / Linux (Bash)
-
 ```bash
-# 1. 仅同步 Claude Code 全局命令
 bash sync-skills.sh
-
-# 2. 注册项目
 bash sync-skills.sh --register ~/work/my-project
-
-# 3. 同步到指定项目
 bash sync-skills.sh --target ~/work/my-project
-
-# 4. 同步到所有已注册项目
 bash sync-skills.sh --target all
-
-# 5. 查看已注册项目列表
 bash sync-skills.sh --list
-```
-
-### 典型工作流
-
-**首次设置新项目：**
-
-```powershell
-# Windows: 注册 + 同步一步到位
-.\sync-skills.ps1 -Register D:\work\new-project -Target D:\work\new-project
-```
-
-```bash
-# macOS/Linux
-bash sync-skills.sh --register ~/work/new-project --target ~/work/new-project
-```
-
-**日常更新（在中心仓库修改技能后）：**
-
-```powershell
-# Windows
-.\sync-skills.ps1 -Target all
-```
-
-```bash
-# macOS/Linux
-bash sync-skills.sh --target all
 ```
 
 ### 注意事项
 
-1. **Windows 符号链接需要管理员权限**：右键 PowerShell → "以管理员身份运行"，然后执行脚本。仅同步 Claude Code 全局命令时不需要管理员权限
-2. **备份机制**：如果目标项目已有 `.cursor/skills` 目录（非 symlink），脚本会自动备份为 `.cursor/skills.bak.{时间戳}`
-3. **`.sync-targets` 文件**：已注册项目列表存储在仓库根目录的 `.sync-targets` 文件中，建议加入 `.gitignore`（路径因人而异）
-4. **首次执行策略**：如果只需要 Claude Code 全局技能同步，无需管理员权限直接运行即可；需要同步 Cursor 到其他项目时再用管理员权限
+1. Windows 下如需创建项目级符号链接，通常需要管理员权限。
+2. 如果目标项目已有普通目录 `.cursor/skills`，脚本会先备份再处理。
+3. 已注册项目保存在根目录 `.sync-targets`。
+4. 仓库内不再分别维护 `.cursor/rules`、`.trae/rules`、`.claude/skills`、`.cursor/skills`。

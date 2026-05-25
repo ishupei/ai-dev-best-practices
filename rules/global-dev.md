@@ -18,7 +18,8 @@ You are a senior architect-level expert, specializing in Java backend (SpringBoo
 
 #### Coding & Utilities
 
-• For object copying, must use BeanUtil.copyProperties().
+• For null checks, must use `java.util.Objects`; for general utility methods, prefer Hutool.
+• For object copying, must use `BeanUtil.copyProperties()`.
 
 #### Layered Architecture
 
@@ -27,13 +28,13 @@ You are a senior architect-level expert, specializing in Java backend (SpringBoo
 
 #### Persistence
 
-• In MyBatis-Plus, prefer LambdaQueryWrapper over QueryWrapper for type safety.
+• In MyBatis-Plus, prefer `LambdaQueryWrapper` over `QueryWrapper` for type safety.
 
 #### Documentation
 
-• Controller and Service: add Javadoc on methods (purpose, @param, @return).
+• Controller and Service: add Javadoc on methods (purpose, `@param`, `@return`).
 • Service impl: add brief inline comments at key logic nodes (validation, branch decisions, external calls, result assembly).
 
 ### 1.2 Prohibited Practices
 
-• Must not use fully qualified type names (e.g. java.util.List); use imports and simple class names.
+• Must not use fully qualified type names (for example `java.util.List`); use imports and simple class names.

@@ -3,9 +3,9 @@
 # 用法: .\sync-skills.ps1 [-Target <项目路径|all>] [-Register <项目路径>] [-List]
 #
 # 功能:
-#   1. 同步 Claude Code skills（目录）到全局 (~/.claude/skills/)
-#   2. 同步 Cursor skills 到全局 (~/.cursor/skills/)
-#   3. 同步 Cursor skills/rules 到指定项目
+#   1. 从中心仓库 skills/ 同步 Claude Code skills 到全局 (~/.claude/skills/)
+#   2. 从中心仓库 skills/ 同步 Cursor skills 到全局 (~/.cursor/skills/)
+#   3. 从中心仓库 skills/ 与 rules/ 同步到目标项目（Cursor / Trae）
 #
 # 示例:
 #   .\sync-skills.ps1                                    # 同步全局 (Claude + Cursor)
@@ -32,7 +32,7 @@ function Log-Ok($msg)   { Write-Host "[OK]   $msg" -ForegroundColor Green }
 function Log-Warn($msg) { Write-Host "[WARN] $msg" -ForegroundColor Yellow }
 function Log-Err($msg)  { Write-Host "[ERR]  $msg" -ForegroundColor Red }
 
-# ---- 1. 同步 Claude Code 全局 skills（.claude/skills/<name>/SKILL.md）----
+# ---- 1. 从中心仓库同步 Claude Code 全局 skills ----
 function Sync-ClaudeGlobal {
     $claudeSkillsGlobal = Join-Path $env:USERPROFILE ".claude\skills"
     if (-not (Test-Path $claudeSkillsGlobal)) {
@@ -40,32 +40,30 @@ function Sync-ClaudeGlobal {
     }
 
     Write-Host ""
-    Write-Host "=== 同步 Claude Code 全局 Skills（目录）==="
+    Write-Host "=== 同步 Claude Code 全局 Skills ==="
 
-    $sourceSkills = Join-Path $SourceDir ".claude\skills"
-    $count = 0
-
+    $sourceSkills = Join-Path $SourceDir "skills"
     if (-not (Test-Path $sourceSkills -PathType Container)) {
         Log-Warn "未找到 $sourceSkills，跳过 Claude 同步"
         return
     }
 
-    Get-ChildItem -Path $sourceSkills -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-        $skillName = $_.Name
-        $srcSkillMd = Join-Path $_.FullName "SKILL.md"
-        if (-not (Test-Path $srcSkillMd)) { return }
+    $skillDirs = Get-ChildItem -Path $sourceSkills -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path (Join-Path $_.FullName "SKILL.md") }
 
-        $destDir = Join-Path $claudeSkillsGlobal $skillName
-        New-Item -ItemType Directory -Path $destDir -Force | Out-Null
-        Copy-Item -LiteralPath $srcSkillMd -Destination (Join-Path $destDir "SKILL.md") -Force
-        Log-Ok "  $skillName/SKILL.md"
-        $count++
+    foreach ($d in $skillDirs) {
+        $targetDir = Join-Path $claudeSkillsGlobal $d.Name
+        if (Test-Path $targetDir) {
+            Remove-Item $targetDir -Recurse -Force
+        }
+        Copy-Item $d.FullName -Destination $targetDir -Recurse -Force
+        Log-Ok "  $($d.Name)"
     }
 
-    Write-Host "  共同步 $count 个技能目录到 $claudeSkillsGlobal"
+    Write-Host "  共同步 $($skillDirs.Count) 个技能目录到 $claudeSkillsGlobal"
 }
 
-# ---- 2. 同步 Cursor skills 到全局 ----
+# ---- 2. 从中心仓库同步 Cursor skills 到全局 ----
 function Sync-CursorGlobal {
     $cursorSkillsDir = Join-Path $env:USERPROFILE ".cursor\skills"
     if (-not (Test-Path $cursorSkillsDir)) {
@@ -75,11 +73,14 @@ function Sync-CursorGlobal {
     Write-Host ""
     Write-Host "=== 同步 Cursor 全局 Skills ==="
 
-    $sourceSkills = Join-Path $SourceDir ".cursor\skills"
+    $sourceSkills = Join-Path $SourceDir "skills"
     $count = 0
 
     Get-ChildItem -Path $sourceSkills -Directory -ErrorAction SilentlyContinue | ForEach-Object {
         $targetDir = Join-Path $cursorSkillsDir $_.Name
+        if (Test-Path $targetDir) {
+            Remove-Item $targetDir -Recurse -Force
+        }
         Copy-Item $_.FullName -Destination $targetDir -Recurse -Force
         Log-Ok "  $($_.Name)"
         $count++
@@ -88,36 +89,71 @@ function Sync-CursorGlobal {
     Write-Host "  共同步 $count 个技能到 $cursorSkillsDir"
 }
 
-# ---- 3. 同步 Cursor skills/rules 到目标项目 ----
-function Sync-CursorToProject($targetPath) {
+# ---- 3. 同步 Cursor / Trae 到目标项目 ----
+function Sync-ProjectTargets($targetPath) {
     if (-not (Test-Path $targetPath -PathType Container)) {
         Log-Err "目标项目不存在: $targetPath"
         return
     }
 
     Write-Host ""
-    Write-Host "=== 同步 Cursor 到: $targetPath ==="
+    Write-Host "=== 同步项目配置到: $targetPath ==="
 
-    $sourceSkills = Join-Path $SourceDir ".cursor\skills"
+    $sourceSkills = Join-Path $SourceDir "skills"
     $targetSkills = Join-Path $targetPath ".cursor\skills"
-    $sourceRules  = Join-Path $SourceDir ".cursor\rules"
+    $targetCursor = Join-Path $targetPath ".cursor"
+    $sourceRules  = Join-Path $SourceDir "rules"
     $targetRules  = Join-Path $targetPath ".cursor\rules"
+    $targetTrae   = Join-Path $targetPath ".trae"
+    $targetTraeSkills = Join-Path $targetPath ".trae\skills"
+    $targetTraeRules  = Join-Path $targetPath ".trae\rules"
 
     # -- 同步 skills --
     if (Test-Path $sourceSkills -PathType Container) {
-        Copy-Item $sourceSkills -Destination (Join-Path $targetPath ".cursor\skills") -Recurse -Force
-        Log-Ok "skills -> $targetSkills"
+        if (-not (Test-Path $targetCursor)) {
+            New-Item -ItemType Directory -Path $targetCursor -Force | Out-Null
+        }
+        if (Test-Path $targetSkills) {
+            Remove-Item $targetSkills -Recurse -Force
+        }
+        Copy-Item $sourceSkills -Destination $targetSkills -Recurse -Force
+        Log-Ok "cursor skills -> $targetSkills"
     }
 
-    # -- 同步 rules --
+    # -- 同步 cursor rules --
     if (Test-Path $sourceRules -PathType Container) {
         if (-not (Test-Path $targetRules)) {
             New-Item -ItemType Directory -Path $targetRules -Force | Out-Null
         }
 
-        Get-ChildItem -Path $sourceRules -Filter "*.mdc" | ForEach-Object {
-            Copy-Item $_.FullName -Destination (Join-Path $targetRules $_.Name) -Force
-            Log-Ok "  rules/$($_.Name)"
+        Get-ChildItem -Path $sourceRules -Filter "*.md" | ForEach-Object {
+            $targetRuleName = [System.IO.Path]::GetFileNameWithoutExtension($_.Name) + ".mdc"
+            Copy-Item $_.FullName -Destination (Join-Path $targetRules $targetRuleName) -Force
+            Log-Ok "  cursor rules/$targetRuleName"
+        }
+    }
+
+    # -- 同步 trae skills --
+    if (Test-Path $sourceSkills -PathType Container) {
+        if (-not (Test-Path $targetTrae)) {
+            New-Item -ItemType Directory -Path $targetTrae -Force | Out-Null
+        }
+        if (Test-Path $targetTraeSkills) {
+            Remove-Item $targetTraeSkills -Recurse -Force
+        }
+        Copy-Item $sourceSkills -Destination $targetTraeSkills -Recurse -Force
+        Log-Ok "trae skills -> $targetTraeSkills"
+    }
+
+    # -- 同步 trae rules --
+    if (Test-Path $sourceRules -PathType Container) {
+        if (-not (Test-Path $targetTraeRules)) {
+            New-Item -ItemType Directory -Path $targetTraeRules -Force | Out-Null
+        }
+
+        Get-ChildItem -Path $sourceRules -Filter "*.md" | ForEach-Object {
+            Copy-Item $_.FullName -Destination (Join-Path $targetTraeRules $_.Name) -Force
+            Log-Ok "  trae rules/$($_.Name)"
         }
     }
 }
@@ -142,14 +178,14 @@ function Sync-AllRegistered {
     }
 
     Get-Content $RegistryFile | Where-Object { $_.Trim() -ne "" } | ForEach-Object {
-        Sync-CursorToProject $_
+        Sync-ProjectTargets $_
     }
 }
 
 # ---- 主流程 ----
 function Main {
     Write-Host "============================================"
-    Write-Host "  AI Skills & Rules 同步工具"
+    Write-Host "  AI Skills  Rules 同步工具"
     Write-Host "  中心仓库: $SourceDir"
     Write-Host "============================================"
 
@@ -178,7 +214,7 @@ function Main {
         if ($Target -eq "all") {
             Sync-AllRegistered
         } else {
-            Sync-CursorToProject $Target
+            Sync-ProjectTargets $Target
         }
     }
 
