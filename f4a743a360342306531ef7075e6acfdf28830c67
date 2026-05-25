@@ -1,0 +1,41 @@
+skills/ai-do/references/code-standards.md
+  d065cfa05637e536 1-138
+skills/ai-do/SKILL.md
+  d065cfa05637e536 8,13,22,26,37-39,42-45,48-50,53,65-69,83,85,104,107
+.content/project-structure.md
+  d065cfa05637e536 4,6,8
+  767538dac1ad637d 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.17",
+  "base_commit_sha": "f4a743a360342306531ef7075e6acfdf28830c67",
+  "prompts": {
+    "767538dac1ad637d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e5e57-a315-77f2-bf07-34f1c6556b60",
+        "model": "gpt-5.4"
+      },
+      "human_author": "jiming <jiming@tsign.cn>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 91,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "d065cfa05637e536": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e5e43-25f9-72c3-91e9-d2325f9db82e",
+        "model": "gpt-5.4"
+      },
+      "human_author": "jiming <jiming@tsign.cn>",
+      "messages": [],
+      "total_additions": 183,
+      "total_deletions": 149,
+      "accepted_lines": 165,
+      "overriden_lines": 0
+    }
+  }
+}
