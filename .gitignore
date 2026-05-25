@@ -4,6 +4,9 @@
 *.swp
 *.swo
 
+# Local registry
+.sync-targets
+
 # OS
 .DS_Store
 Thumbs.db

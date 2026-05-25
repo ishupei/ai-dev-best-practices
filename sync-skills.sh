@@ -1,11 +1,11 @@
 #!/bin/bash
 # ============================================================
-# AI Skills & Rules 同步脚本
+# AI Skills 同步脚本
 # 用法: bash sync-skills.sh [--target <项目路径>]
 #
 # 功能:
 #   1. 从中心仓库 skills/ 同步 Claude Code skills 到全局 (~/.claude/skills/)
-#   2. 从中心仓库 skills/ 与 rules/ 同步到目标项目（Cursor / Trae）
+#   2. 从中心仓库 skills/ 同步到目标项目（Cursor / Trae）
 #
 # 示例:
 #   bash sync-skills.sh                          # 同步 Claude Code 全局
@@ -61,7 +61,7 @@ sync_claude_global() {
     echo "  共同步 $count 个技能目录到 $claude_skills_global"
 }
 
-# ---- 2. 同步 Cursor skills/rules 到目标项目 ----
+# ---- 2. 同步 Cursor/Trae skills 到目标项目 ----
 sync_project_targets() {
     local target="$1"
 
@@ -99,30 +99,6 @@ sync_project_targets() {
         log_ok "cursor skills -> $source_skills"
     fi
 
-    # 同步 cursor rules（逐文件 symlink，保留项目自有 rules）
-    local target_rules="$target/.cursor/rules"
-    local source_rules="$SOURCE_DIR/rules"
-
-    if [ -d "$source_rules" ]; then
-        mkdir -p "$target_rules"
-
-        for f in "$source_rules/"*.md; do
-            [ -f "$f" ] || continue
-            local fname=$(basename "$f" .md)
-            local target_file="$target_rules/$fname.mdc"
-
-            # 如果目标已有同名非 symlink 文件，跳过（项目自有规则优先）
-            if [ -f "$target_file" ] && [ ! -L "$target_file" ]; then
-                log_warn "跳过 $fname（项目已有自定义版本）"
-                continue
-            fi
-
-            [ -L "$target_file" ] && rm "$target_file"
-            ln -s "$f" "$target_file"
-            log_ok "cursor rules/$fname.mdc -> 中心仓库"
-        done
-    fi
-
     # 同步 trae skills
     local target_trae_skills="$target/.trae/skills"
     if [ -d "$source_skills" ]; then
@@ -132,16 +108,6 @@ sync_project_targets() {
         log_ok "trae skills -> $target_trae_skills"
     fi
 
-    # 同步 trae rules
-    local target_trae_rules="$target/.trae/rules"
-    if [ -d "$source_rules" ]; then
-        mkdir -p "$target_trae_rules"
-        for f in "$source_rules/"*.md; do
-            [ -f "$f" ] || continue
-            cp "$f" "$target_trae_rules/$(basename "$f")"
-            log_ok "trae rules/$(basename "$f") -> 中心仓库"
-        done
-    fi
 }
 
 # ---- 3. 注册项目 ----
@@ -174,7 +140,7 @@ sync_all_registered() {
 # ---- 主流程 ----
 main() {
     echo "============================================"
-    echo "  AI Skills & Rules 同步工具"
+    echo "  AI Skills 同步工具"
     echo "  中心仓库: $SOURCE_DIR"
     echo "============================================"
 

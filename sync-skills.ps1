@@ -1,11 +1,11 @@
 # ============================================================
-# AI Skills & Rules 同步脚本 (PowerShell)
+# AI Skills 同步脚本 (PowerShell)
 # 用法: .\sync-skills.ps1 [-Target <项目路径|all>] [-Register <项目路径>] [-List]
 #
 # 功能:
 #   1. 从中心仓库 skills/ 同步 Claude Code skills 到全局 (~/.claude/skills/)
 #   2. 从中心仓库 skills/ 同步 Cursor skills 到全局 (~/.cursor/skills/)
-#   3. 从中心仓库 skills/ 与 rules/ 同步到目标项目（Cursor / Trae）
+#   3. 从中心仓库 skills/ 同步到目标项目（Cursor / Trae）
 #
 # 示例:
 #   .\sync-skills.ps1                                    # 同步全局 (Claude + Cursor)
@@ -102,11 +102,8 @@ function Sync-ProjectTargets($targetPath) {
     $sourceSkills = Join-Path $SourceDir "skills"
     $targetSkills = Join-Path $targetPath ".cursor\skills"
     $targetCursor = Join-Path $targetPath ".cursor"
-    $sourceRules  = Join-Path $SourceDir "rules"
-    $targetRules  = Join-Path $targetPath ".cursor\rules"
     $targetTrae   = Join-Path $targetPath ".trae"
     $targetTraeSkills = Join-Path $targetPath ".trae\skills"
-    $targetTraeRules  = Join-Path $targetPath ".trae\rules"
 
     # -- 同步 skills --
     if (Test-Path $sourceSkills -PathType Container) {
@@ -120,19 +117,6 @@ function Sync-ProjectTargets($targetPath) {
         Log-Ok "cursor skills -> $targetSkills"
     }
 
-    # -- 同步 cursor rules --
-    if (Test-Path $sourceRules -PathType Container) {
-        if (-not (Test-Path $targetRules)) {
-            New-Item -ItemType Directory -Path $targetRules -Force | Out-Null
-        }
-
-        Get-ChildItem -Path $sourceRules -Filter "*.md" | ForEach-Object {
-            $targetRuleName = [System.IO.Path]::GetFileNameWithoutExtension($_.Name) + ".mdc"
-            Copy-Item $_.FullName -Destination (Join-Path $targetRules $targetRuleName) -Force
-            Log-Ok "  cursor rules/$targetRuleName"
-        }
-    }
-
     # -- 同步 trae skills --
     if (Test-Path $sourceSkills -PathType Container) {
         if (-not (Test-Path $targetTrae)) {
@@ -143,18 +127,6 @@ function Sync-ProjectTargets($targetPath) {
         }
         Copy-Item $sourceSkills -Destination $targetTraeSkills -Recurse -Force
         Log-Ok "trae skills -> $targetTraeSkills"
-    }
-
-    # -- 同步 trae rules --
-    if (Test-Path $sourceRules -PathType Container) {
-        if (-not (Test-Path $targetTraeRules)) {
-            New-Item -ItemType Directory -Path $targetTraeRules -Force | Out-Null
-        }
-
-        Get-ChildItem -Path $sourceRules -Filter "*.md" | ForEach-Object {
-            Copy-Item $_.FullName -Destination (Join-Path $targetTraeRules $_.Name) -Force
-            Log-Ok "  trae rules/$($_.Name)"
-        }
     }
 }
 
@@ -185,7 +157,7 @@ function Sync-AllRegistered {
 # ---- 主流程 ----
 function Main {
     Write-Host "============================================"
-    Write-Host "  AI Skills  Rules 同步工具"
+    Write-Host "  AI Skills 同步工具"
     Write-Host "  中心仓库: $SourceDir"
     Write-Host "============================================"
 
