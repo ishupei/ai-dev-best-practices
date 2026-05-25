@@ -1,0 +1,35 @@
+skills/ai-clear/SKILL.md
+  0d62b3c8a101b9e6 3,16,27,64,67,91,96
+skills/ai-draft/SKILL.md
+  0d62b3c8a101b9e6 3,8,16-17,20-21,44,128
+skills/ai-plan/SKILL.md
+  0d62b3c8a101b9e6 8,16,27,51,64,151,154
+skills/ai-design/SKILL.md
+  0d62b3c8a101b9e6 44,122
+skills/ai-task/SKILL.md
+  0d62b3c8a101b9e6 16,27,53,66-67,112,116
+skills/ai-summary/SKILL.md
+  0d62b3c8a101b9e6 8,17,22,26,28,33,35,42,49,65,69,76,87,95,113-114,126
+skills/ai-do/SKILL.md
+  0d62b3c8a101b9e6 16,83,102,106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.17",
+  "base_commit_sha": "96100a3cc853878f6a2ada8ef69ed4988d84b731",
+  "prompts": {
+    "0d62b3c8a101b9e6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e5e15-b35d-7f03-ba79-b3b782cecb79",
+        "model": "gpt-5.4"
+      },
+      "human_author": "jiming <jiming@tsign.cn>",
+      "messages": [],
+      "total_additions": 170,
+      "total_deletions": 170,
+      "accepted_lines": 131,
+      "overriden_lines": 0
+    }
+  }
+}
