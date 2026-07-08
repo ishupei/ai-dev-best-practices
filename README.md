@@ -12,6 +12,7 @@ ai-dev-best-practices/
 │   ├── ai-bug/
 │   ├── ai-clear/
 │   ├── ai-commit/
+│   ├── confluence-page-update/
 │   ├── ai-design/
 │   ├── ai-do/
 │   │   ├── SKILL.md
@@ -48,6 +49,7 @@ ai-dev-best-practices/
 | `/ai-commit` | 生成标准化中文 commit message |
 | `/ai-push` | 执行提交与推送 |
 | `/ai-summary` | 生成或更新上下文摘要 |
+| `confluence-page-update` | 检查并更新指定 Confluence 页面内容 |
 
 ## 同步行为
 
