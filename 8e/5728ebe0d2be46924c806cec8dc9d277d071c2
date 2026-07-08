@@ -1,0 +1,21 @@
+skills/ai-check/SKILL.md
+  s_bcc977e46dd0cd::t_e2869c3d40607a 76-77,81-91,94,96-101,103
+  s_bcc977e46dd0cd::t_b3038659251779 3,8,19,26-29,33,49,53,78-80,107-145,151
+  s_bcc977e46dd0cd::t_775475dbffc615 1-2,4-7,9-18,20-25,30-32,34-48,50-52,54-75,92-93,95,102,104-106,146-150,152-153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8e5728ebe0d2be46924c806cec8dc9d277d071c2",
+  "prompts": {},
+  "sessions": {
+    "s_bcc977e46dd0cd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f408b-1509-7402-907e-1cc86b7c407d",
+        "model": "gpt-5.5"
+      },
+      "human_author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
