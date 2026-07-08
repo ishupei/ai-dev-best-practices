@@ -10,6 +10,7 @@ ai-dev-best-practices/
 │   └── project-structure.md
 ├── skills/
 │   ├── ai-bug/
+│   ├── ai-check/
 │   ├── ai-clear/
 │   ├── ai-comment/
 │   ├── ai-commit/
@@ -42,6 +43,7 @@ ai-dev-best-practices/
 |------|------|
 | `/ai-draft` | 生成需求初稿 |
 | `/ai-clear` | 澄清需求歧义并补全约束 |
+| `/ai-check` | 对方案、代码改动或回答内容进行评分与落地性评审 |
 | `/ai-comment` | 为新增或变更的 Java 代码补充 Javadoc 和关键逻辑单行注释 |
 | `/ai-plan` | 输出技术方案与总体设计 |
 | `/ai-design` | 输出详细技术设计 |
