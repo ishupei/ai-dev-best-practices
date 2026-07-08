@@ -1,0 +1,53 @@
+skills/ai-task/SKILL.md
+  s_950f0a71f92a55::t_b4728758c4fecc 13,54,117
+  s_950f0a71f92a55::t_bd92ab2de4102f 17
+skills/ai-bug/SKILL.md
+  s_950f0a71f92a55::t_f5e7ee44a27df8 13,88,161
+skills/ai-plan/SKILL.md
+  s_950f0a71f92a55::t_ed77102be8a870 13,17,52,155
+  s_950f0a71f92a55::t_d412a2ccbb877f 65
+skills/ai-design/SKILL.md
+  s_950f0a71f92a55::t_3bc1eaf0120c62 3,13,45,123
+skills/ai-do/SKILL.md
+  s_950f0a71f92a55::t_a3b2bbd8d1dde8 18
+  s_950f0a71f92a55::t_87fb4c182ba601 14
+README.md
+  4772d5b5eb05e2be 15,52
+skills/ai-draft/SKILL.md
+  s_950f0a71f92a55::t_9e309c37ee0eb6 16-19,22
+  s_950f0a71f92a55::t_1142fca370585f 20-21,45,129
+skills/ai-summary/SKILL.md
+  s_950f0a71f92a55::t_08cf47e36c09d7 8
+  s_950f0a71f92a55::t_0989e0f9322f16 13,16,18-19,34,43,65,120,126,129
+skills/ai-clear/SKILL.md
+  s_950f0a71f92a55::t_88293e1c7fcebc 13,15,17,68,92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4f72a08cc37617b6d7c1a7bf676fdd69cdda6c8d",
+  "prompts": {
+    "4772d5b5eb05e2be": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ecfb7-f9e3-7cf0-a440-3cc1a2eb58a3",
+        "model": "gpt-5.4"
+      },
+      "human_author": "jiming <jiming@tsign.cn>",
+      "total_additions": 2,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  },
+  "sessions": {
+    "s_950f0a71f92a55": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f85-5607-7bf1-8e0e-ea642d59a7d7",
+        "model": "gpt-5.5"
+      },
+      "human_author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
