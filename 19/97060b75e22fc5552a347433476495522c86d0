@@ -1,0 +1,20 @@
+README.md
+  s_bcc977e46dd0cd::t_775475dbffc615 13
+  s_bcc977e46dd0cd::t_0d7907afb9b4a3 46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1997060b75e22fc5552a347433476495522c86d0",
+  "prompts": {},
+  "sessions": {
+    "s_bcc977e46dd0cd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f408b-1509-7402-907e-1cc86b7c407d",
+        "model": "gpt-5.5"
+      },
+      "human_author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
