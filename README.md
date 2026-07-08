@@ -11,6 +11,7 @@ ai-dev-best-practices/
 ├── skills/
 │   ├── ai-bug/
 │   ├── ai-clear/
+│   ├── ai-comment/
 │   ├── ai-commit/
 │   ├── confluence-page-update/
 │   ├── ai-design/
@@ -41,6 +42,7 @@ ai-dev-best-practices/
 |------|------|
 | `/ai-draft` | 生成需求初稿 |
 | `/ai-clear` | 澄清需求歧义并补全约束 |
+| `/ai-comment` | 为新增或变更的 Java 代码补充 Javadoc 和关键逻辑单行注释 |
 | `/ai-plan` | 输出技术方案与总体设计 |
 | `/ai-design` | 输出详细技术设计 |
 | `/ai-task` | 将设计拆成可执行任务 |

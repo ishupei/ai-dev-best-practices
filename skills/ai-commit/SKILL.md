@@ -44,19 +44,9 @@ description: "分析当前变更，生成标准化中文 Git commit message。�
 
 - 直接输出 commit message 纯文本，不加任何额外说明。
 
-## 示例
+## 完成自检
 
-```
-feat: 新增用户登录认证逻辑
-
-//1. 集成后端登录API接口调用
-//2. 添加JWT令牌存储与状态管理
-```
-
-## Checklist
-
-- [ ] 用户输入以 `/ai-commit` 开头，已触发本技能
-- [ ] 已通过 AI 上下文或 git diff 理解变更内容
-- [ ] Subject line 符合 `<type>: <summary>` 格式，至多 30 字
-- [ ] Body（如有）使用 `//1.` 编号，最多 5 条，无文件路径
-- [ ] 仅输出 commit message 纯文本，未执行任何 git 写操作
+- 已通过上下文或 `git status` / `git diff` 理解变更。
+- Subject 符合 `<type>: <summary>`，中文摘要至多 30 字。
+- Body 如有，使用 `//1.` 编号，最多 5 条，不列文件路径。
+- 仅输出 commit message 纯文本，未执行 git 写操作。
