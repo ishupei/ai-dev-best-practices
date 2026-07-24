@@ -1,0 +1,25 @@
+skills/ai-db/scripts/db_query.py
+  s_2301424bacb954::t_edf1e94ff89884 1-693
+skills/ai-db/agents/openai.yaml
+  s_2301424bacb954::t_47b38a4f3c8ff7 1-6
+skills/ai-db/SKILL.md
+  s_2301424bacb954::t_d34768caeadd6d 1-79
+skills/ai-db/references/config-format.md
+  s_2301424bacb954::t_47c8151d5cb8e6 1-111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "312a742eba22f603956d181a6b3d4de9d12efd0e",
+  "prompts": {},
+  "sessions": {
+    "s_2301424bacb954": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f893b-8df0-76c1-8522-fb0c9c84fd78",
+        "model": "gpt-5.5"
+      },
+      "human_author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
