@@ -1,0 +1,6 @@
+interface:
+  display_name: "AI DB"
+  short_description: "显式调用链使用的 MySQL 环境查询工具"
+  default_prompt: "Use $ai-db to query a configured MySQL environment with a read-only SQL statement."
+policy:
+  allow_implicit_invocation: false
