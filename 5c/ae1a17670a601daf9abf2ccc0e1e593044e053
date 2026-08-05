@@ -1,0 +1,21 @@
+skills/ai-do/SKILL.md
+  s_060f913dc9a177::t_8a74d445a4ed18 49-50,56,90-91
+skills/ai-do/references/code-standards.md
+  s_060f913dc9a177::t_8a74d445a4ed18 55-56,73-74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "5cae1a17670a601daf9abf2ccc0e1e593044e053",
+  "prompts": {},
+  "sessions": {
+    "s_060f913dc9a177": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcc4b-a367-75c1-8092-6b77016236fe",
+        "model": "gpt-5.5"
+      },
+      "human_author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
