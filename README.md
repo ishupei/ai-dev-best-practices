@@ -17,8 +17,10 @@ ai-dev-best-practices/
 │   ├── confluence-page-update/
 │   ├── ai-design/
 │   ├── ai-do/
+│   │   ├── agents/
 │   │   ├── SKILL.md
-│   │   └── references/
+│   │   ├── references/
+│   │   └── scripts/
 │   ├── ai-draft/
 │   ├── ai-plan/
 │   ├── ai-push/
@@ -34,6 +36,7 @@ ai-dev-best-practices/
 
 - `skills/`：唯一权威源目录，每个技能使用目录结构保存，入口文件为 `SKILL.md`。
 - `skills/ai-do/references/`：技能附属规范，供 `/ai-do` 执行实现任务时读取。
+- `skills/ai-do/scripts/`：随技能分发的辅助标定脚本（条款引用、汇报完整性、diff 范围检查；`.ps1` 供 Windows，`.sh` 供 macOS/Linux），按需运行。
 - `.content/project-structure.md`：仓库结构说明。
 - `.sync-targets`：同步脚本运行后按需生成的注册目标清单，不纳入版本管理。
 
@@ -48,7 +51,7 @@ ai-dev-best-practices/
 | `/ai-plan` | 输出技术方案与总体设计 |
 | `/ai-design` | 输出详细技术设计 |
 | `/ai-task` | 将设计拆成可执行任务 |
-| `/ai-do` | 逐任务实现、验证并更新进度 |
+| `/ai-do` | 代码落地前的最终规范关卡：按规范实现并验证代码（可无 TASK/PLAN，仅上下文即可执行） |
 | `/ai-bug` | 定位问题、分析根因与影响面 |
 | `/ai-commit` | 生成标准化中文 commit message |
 | `/ai-push` | 执行提交与推送 |

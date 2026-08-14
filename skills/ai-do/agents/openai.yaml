@@ -1,0 +1,6 @@
+interface:
+  display_name: "AI Do"
+  short_description: "按执行契约实现并验证代码"
+  default_prompt: "Use $ai-do to implement the requested code change with a scoped execution contract, standards checks, diff review, and explicit validation results."
+policy:
+  allow_implicit_invocation: false
