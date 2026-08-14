@@ -1,0 +1,91 @@
+README.md
+  s_bee51bab200d14::t_64453c85916951 20,22-23
+  s_bee51bab200d14::t_915fb3d4ae10c3 39,54
+skills/ai-do/references/java-spring.md
+  s_bee51bab200d14::t_ead914080bff25 3,8-9,14
+  s_bee51bab200d14::t_d1a778a76b03b9 1-2,4-7,10-13
+skills/ai-do/SKILL.md
+  s_bee51bab200d14::t_d1a778a76b03b9 3,6,10,15-16,21,30,38,42-49,51-54,56,60,64-68,72-76,78,83,87-92,98,100-107
+  s_4b5aa5ae0ec23a::t_8097e6ef6d8f0d 79,82,84,86,93,95,97,99
+  s_bee51bab200d14::t_4115f97bf4c7fd 8,12,14,17,19,55
+  s_bee51bab200d14::t_a9fdacd11f09ec 23,25-28,32-36,40,58,62,70,80-81,85,94,96,108
+skills/ai-do/references/code-standards.md
+  s_bee51bab200d14::t_ead914080bff25 3,9,11-13
+  s_bee51bab200d14::t_d1a778a76b03b9 1,5-7,15
+skills/ai-do/scripts/check-refs.sh
+  s_bee51bab200d14::t_bf59e25ecb373a 1-105
+skills/ai-do/scripts/check-report.sh
+  s_bee51bab200d14::t_bf59e25ecb373a 1-56
+skills/ai-check/SKILL.md
+  s_4b5aa5ae0ec23a::t_4d0e442bd25daa 3,6,8,10,12-22,24,26,28-34,36,38-42,44,46,48-51,53,55-57,59,61,63,67,74-75,100-115,117-122
+skills/ai-do/agents/openai.yaml
+  s_bee51bab200d14::t_d1a778a76b03b9 1-6
+skills/ai-do/references/verification.md
+  s_bee51bab200d14::t_4115f97bf4c7fd 16,20-23,27-30
+  s_bee51bab200d14::t_d1a778a76b03b9 1-12,17-19,24-26
+  s_bee51bab200d14::t_ead914080bff25 13-15,31
+skills/ai-do/scripts/check-report.ps1
+  s_bee51bab200d14::t_75e3b17be9de9c 20-25,45-48,50-55
+  s_bee51bab200d14::t_bf59e25ecb373a 1,4,8-19,26-28,30,32-34,36-38,40,44,56-65,67-69,71
+  s_bee51bab200d14::t_3ec4f05606f27d 2-3,5-7,29,31,35,39,49,66,70
+  s_bee51bab200d14::t_ed4eac4b8ca3e9 41-43
+skills/ai-do/scripts/check-refs.ps1
+  s_bee51bab200d14::t_bf59e25ecb373a 1,4,6-7,10,22-31,33-36,38-51,79,109
+  s_bee51bab200d14::t_3ec4f05606f27d 2-3,5,8-9,32,37,54-67,82-108,112
+  s_bee51bab200d14::t_75e3b17be9de9c 72-75
+  s_bee51bab200d14::t_8a7ed9a0d91205 11-13,19-21
+  s_bee51bab200d14::t_98500021a71882 52-53
+  s_bee51bab200d14::t_8463a3c7a18bba 68-71
+  s_bee51bab200d14::t_f0dda5779d3f0b 76-78
+  s_bee51bab200d14::t_f25f76ad0c8dd4 80-81
+  s_bee51bab200d14::t_da5e93e9e5eda9 110-111
+  s_bee51bab200d14::t_2b5d64b75e85a8 113
+  s_bee51bab200d14::t_038b9eca8f5d1f 14-18
+skills/ai-do/references/core-standards.md
+  s_bee51bab200d14::t_ead914080bff25 6,25,51-57
+  s_bee51bab200d14::t_d1a778a76b03b9 1-5,7-10,16-23,26-28,41,48-50
+  s_bee51bab200d14::t_4115f97bf4c7fd 11-15,24,29-40,42-47
+skills/ai-do/scripts/check-diff-scope.ps1
+  s_bee51bab200d14::t_bf59e25ecb373a 1,4,8-23,25-27,33-36,42-43,47-50,52,54-57,59-63,65-67,69-71,73-76,78
+  s_bee51bab200d14::t_3ec4f05606f27d 2-3,5-7,24,51,53,58,64,68,72,77
+  s_bee51bab200d14::t_7ee92dab6cef4b 28-29,31-32,37-41
+  s_bee51bab200d14::t_bbd897e478c017 30,44-46
+skills/ai-do/scripts/check-diff-scope.sh
+  s_bee51bab200d14::t_4be39304fc3f3d 34-35,37-38,42
+  s_bee51bab200d14::t_bf59e25ecb373a 1-33,39-41,43-73
+  s_bee51bab200d14::t_bbd897e478c017 36
+skills/ai-task/SKILL.md
+  s_56e920beef9860::t_70c0446790f8e5 66,73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c07843a5f0579f6068318f79ac52a7f7505a16fb",
+  "prompts": {},
+  "sessions": {
+    "s_4b5aa5ae0ec23a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0014d-0622-7ad2-b506-e4ae45f71f0a",
+        "model": "gpt-5.5"
+      },
+      "human_author": "xtmplus <ishupei@qq.com>"
+    },
+    "s_56e920beef9860": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0015b-d257-71f1-a03e-e4c4cd94bce2",
+        "model": "gpt-5.5"
+      },
+      "human_author": "xtmplus <ishupei@qq.com>"
+    },
+    "s_bee51bab200d14": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0016c-ce6e-7240-93b2-10c1b56ca1bb",
+        "model": "gpt-5.5"
+      },
+      "human_author": "xtmplus <ishupei@qq.com>"
+    }
+  }
+}
