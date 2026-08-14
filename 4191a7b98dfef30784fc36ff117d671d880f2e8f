@@ -1,0 +1,21 @@
+skills/ai-comment/SKILL.md
+  s_55da96b4237a6e::t_92c529d2b0e70c 3,8,10,12-13,15-16,20-25,29-33,37-40
+  s_55da96b4237a6e::t_d83dc59beb0bae 1-2,4-7,9,11,18-19,26-28,34-36,41
+  s_55da96b4237a6e::t_c2e8061850548f 14,17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4191a7b98dfef30784fc36ff117d671d880f2e8f",
+  "prompts": {},
+  "sessions": {
+    "s_55da96b4237a6e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3fa8-f8b2-79e1-b604-04e2ca60763a",
+        "model": "gpt-5.5"
+      },
+      "human_author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}

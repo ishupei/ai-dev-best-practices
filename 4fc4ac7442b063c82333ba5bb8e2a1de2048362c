@@ -1,0 +1,89 @@
+skills/ai-design/SKILL.md
+  c60675e3d349b0f1 1-122
+skills/ai-draft/SKILL.md
+  c60675e3d349b0f1 1-129
+rules/global-dev.md
+  d7856fc6bd2c30e6 1-40
+skills/ai-commit/SKILL.md
+  c60675e3d349b0f1 1-62
+skills/ai-push/SKILL.md
+  c60675e3d349b0f1 1-91
+rules/self-project.md
+  d7856fc6bd2c30e6 1-28
+sync-skills.ps1
+  c60675e3d349b0f1 6-8,35,43,45,66,76,81-83,92-93,100,102,104-105,107-109,113-120,123,129-132,135-156,181,217
+  74800abc03dd92ef 51-60,63
+skills/ai-clear/SKILL.md
+  c60675e3d349b0f1 1-98
+skills/ai-bug/SKILL.md
+  c60675e3d349b0f1 1-163
+skills/ai-do/SKILL.md
+  c60675e3d349b0f1 1-107
+skills/ai-summary/SKILL.md
+  c60675e3d349b0f1 1-130
+skills/ai-plan/SKILL.md
+  c60675e3d349b0f1 1-155
+rules/work-project.md
+  d7856fc6bd2c30e6 1-23
+skills/ai-task/SKILL.md
+  c60675e3d349b0f1 1-117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.17",
+  "base_commit_sha": "4fc4ac7442b063c82333ba5bb8e2a1de2048362c",
+  "prompts": {
+    "1f802a29bda230cc": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "cc5adc84-6816-4cb6-916b-3b69344deb7b",
+        "model": "default"
+      },
+      "human_author": "jiming <jiming@tsign.cn>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "74800abc03dd92ef": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "f94f0357-f9ce-42dc-8ad5-eeac153f624c",
+        "model": "default"
+      },
+      "human_author": "jiming <jiming@tsign.cn>",
+      "messages": [],
+      "total_additions": 36,
+      "total_deletions": 27,
+      "accepted_lines": 18,
+      "overriden_lines": 0
+    },
+    "c60675e3d349b0f1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e5dc6-4fce-77f2-95f9-d578afa7aab2",
+        "model": "gpt-5.4"
+      },
+      "human_author": "jiming <jiming@tsign.cn>",
+      "messages": [],
+      "total_additions": 1239,
+      "total_deletions": 691,
+      "accepted_lines": 1235,
+      "overriden_lines": 0
+    },
+    "d7856fc6bd2c30e6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e5e01-9cf9-7a12-bedf-381ee5ea727b",
+        "model": "gpt-5.4"
+      },
+      "human_author": "jiming <jiming@tsign.cn>",
+      "messages": [],
+      "total_additions": 273,
+      "total_deletions": 3852,
+      "accepted_lines": 91,
+      "overriden_lines": 0
+    }
+  }
+}

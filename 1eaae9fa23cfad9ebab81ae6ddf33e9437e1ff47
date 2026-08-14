@@ -1,0 +1,58 @@
+skills/ai-bug/SKILL.md
+  s_55da96b4237a6e::t_2727639fb61233 91,98-104
+skills/ai-draft/SKILL.md
+  s_55da96b4237a6e::t_4d033fc4d06ef5 28-35,41-42,44-47,54-55
+  s_55da96b4237a6e::t_ee2b44718bca1b 66,68-74,76,78-81
+skills/ai-clear/SKILL.md
+  s_a2b00c89eba58c::t_fe45f698165fac 53-54,84
+  s_a2b00c89eba58c::t_221b0a394185f3 63,85
+  s_55da96b4237a6e::t_24a6e58a804fb0 79-83
+skills/ai-do/references/code-standards.md
+  s_55da96b4237a6e::t_508a3eb5fe0cd7 21,25,41
+  s_55da96b4237a6e::t_9ef2baf485abc6 3,7-8,23-24,26,28,30-36,43,72
+skills/ai-design/SKILL.md
+  s_55da96b4237a6e::t_17c2a3a0f453c2 71,73-78,80,82-85
+  s_55da96b4237a6e::t_f0efed1ee95554 14-18,26-33,38-42,57-62
+skills/ai-commit/SKILL.md
+  s_55da96b4237a6e::t_9e97fc867d2978 47,49-52
+skills/ai-do/SKILL.md
+  s_55da96b4237a6e::t_8484c85b84e6bb 13-14,37,75-81
+  s_55da96b4237a6e::t_d8be6ba352a5fb 42-43
+  s_55da96b4237a6e::t_35ad681158dfab 57-58,82-88
+skills/ai-task/SKILL.md
+  s_55da96b4237a6e::t_770bf0a5a9ffa0 61-74
+README.md
+  s_55da96b4237a6e::t_015da5320f38b5 14,45
+skills/ai-plan/SKILL.md
+  s_55da96b4237a6e::t_091908dc9eb16a 89,91-98,100,102-105
+  s_55da96b4237a6e::t_3ec329c76e1187 24-31,34,37-41,48-58,65,72-78,80
+skills/ai-push/SKILL.md
+  s_55da96b4237a6e::t_f5bc31aabda14e 22-29,36,38-47,49,57,65,67-71,74,80
+  s_55da96b4237a6e::t_ddff2744ab5a54 91,93-97
+skills/ai-summary/SKILL.md
+  s_55da96b4237a6e::t_c69459abce091a 58-69,76,78-81
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1eaae9fa23cfad9ebab81ae6ddf33e9437e1ff47",
+  "prompts": {},
+  "sessions": {
+    "s_55da96b4237a6e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3fa8-f8b2-79e1-b604-04e2ca60763a",
+        "model": "gpt-5.5"
+      },
+      "human_author": "jiming <jiming@tsign.cn>"
+    },
+    "s_a2b00c89eba58c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f406b-bdf7-7280-9105-655f471bcece",
+        "model": "gpt-5.5"
+      },
+      "human_author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
