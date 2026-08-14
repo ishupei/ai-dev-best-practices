@@ -1,0 +1,8 @@
+{
+  "baseUrl": "http://wiki.timevale.cn:8081",
+  "pageId": "",
+  "authType": "basic",
+  "username": "your-username",
+  "password": "replace-with-your-password",
+  "token": ""
+}

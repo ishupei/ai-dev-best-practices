@@ -31,3 +31,5 @@ out/
 
 # Logs
 *.log
+reasonix.*
+*.reasonix
