@@ -16,6 +16,10 @@ desktop.ini
 .env
 .env.*
 
+# Personal skill configs (may contain credentials; never commit)
+skills/**/scripts/tianyin-wiki.config.json
+skills/**/tianyin-wiki.config.json
+
 # Dependencies
 node_modules/
 vendor/

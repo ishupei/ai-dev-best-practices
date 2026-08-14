@@ -6,8 +6,8 @@ description: "显式 MySQL 数据库查询与调用链辅助。当用户输入 /
 # AI DB
 
 此技能给 AI 或其他 skill 的调用链使用，用于在显式授权下查询 MySQL。
-默认存储目录为 `%USERPROFILE%\.codex\ai-db\`，可通过 `AI_DB_DIR` 或
-`--store-dir` 覆盖。
+默认存储目录为 `%USERPROFILE%\.config\ai-db\`（macOS/Linux 为 `~/.config/ai-db/`），
+可通过 `AI_DB_DIR` 或 `--store-dir` 覆盖。
 
 ## 渐进式披露
 

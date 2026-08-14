@@ -64,9 +64,8 @@ def default_store_dir() -> Path:
     configured = os.environ.get("AI_DB_DIR")
     if configured:
         return Path(configured).expanduser()
-    codex_home = os.environ.get("CODEX_HOME")
-    base = Path(codex_home).expanduser() if codex_home else Path.home() / ".codex"
-    return base / DEFAULT_DIR_NAME
+    # 统一存于用户配置目录 ~/.config/ai-db（跨工具一致，不入库、不随 skill 分发）
+    return Path.home() / ".config" / DEFAULT_DIR_NAME
 
 
 def index_path(store_dir: Path) -> Path:

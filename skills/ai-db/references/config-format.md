@@ -7,14 +7,14 @@ Read this file only when environment storage details are needed.
 Default:
 
 ```text
-%USERPROFILE%\.codex\ai-db\
+%USERPROFILE%\.config\ai-db\
 ```
 
 Override order:
 
 1. `--store-dir <dir>`
 2. `AI_DB_DIR`
-3. `%USERPROFILE%\.codex\ai-db\`
+3. `%USERPROFILE%\.config\ai-db\`
 
 ## Directory Layout
 
