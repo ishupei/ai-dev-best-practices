@@ -42,6 +42,9 @@ TEMPLATE_ALIASES = {
     "baseline": "baseline",
     "default": "baseline",
     "1-n": "1-n",
+    # raw 模式：不校验任何格式，直接发布任意本地 Markdown
+    "raw": "raw",
+    "direct": "raw",
 }
 
 ALLOWED_CLEAR_TARGETS = {
@@ -88,6 +91,13 @@ def normalize_template_name(template_name: str) -> str:
         raise ValueError(f"unsupported template: {template_name}") from exc
 
 
+def resolve_template(args: argparse.Namespace, fallback: str = "baseline") -> str:
+    """Effective template: explicit CLI flag > config file `template` field > fallback."""
+    config_data = load_config_file()
+    value = getattr(args, "template", None) or config_data.get("template") or fallback
+    return normalize_template_name(str(value).strip())
+
+
 def get_template_file(template_name: str) -> Path:
     filename = TEMPLATE_FILES[normalize_template_name(template_name)]
     candidate = TEMPLATE_DIR / filename
@@ -103,6 +113,8 @@ def get_template_file(template_name: str) -> Path:
 @lru_cache(maxsize=4)
 def template_headings(template_name: str) -> list[str]:
     """Expected `## `/`### ` headings, derived from the template file (single source of truth)."""
+    if normalize_template_name(template_name) == "raw":
+        return []
     text = read_text(get_template_file(template_name))
     return [
         line.strip()
@@ -112,15 +124,90 @@ def template_headings(template_name: str) -> list[str]:
 
 
 @lru_cache(maxsize=4)
-def template_table_headers(template_name: str) -> list[str]:
-    """Expected Markdown table header rows, derived from the template file."""
+def template_heading_ancestors(template_name: str) -> dict[str, list[str]]:
+    """Map each template heading to the chain of its ancestor headings (closest first)."""
+    if normalize_template_name(template_name) == "raw":
+        return {}
     lines = normalize_newlines(read_text(get_template_file(template_name))).split("\n")
-    headers: list[str] = []
+    stack: list[tuple[int, str]] = []
+    ancestors: dict[str, list[str]] = {}
+    for line in lines:
+        stripped = line.strip()
+        if not re.match(r"^#{1,6}\s+\S", stripped):
+            continue
+        level = len(stripped) - len(stripped.lstrip("#"))
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        ancestors[stripped] = [heading for _, heading in stack]
+        stack.append((level, stripped))
+    return ancestors
+
+
+@lru_cache(maxsize=4)
+def template_table_owners(template_name: str) -> dict[str, str]:
+    """Map each required table header row to its nearest preceding template heading."""
+    if normalize_template_name(template_name) == "raw":
+        return {}
+    lines = normalize_newlines(read_text(get_template_file(template_name))).split("\n")
+    current: str | None = None
+    mapping: dict[str, str] = {}
     for index, line in enumerate(lines):
         stripped = line.strip()
-        if stripped.startswith("|") and index + 1 < len(lines) and is_table_separator(lines[index + 1]):
-            headers.append(stripped)
-    return headers
+        if re.match(r"^#{1,6}\s+\S", stripped):
+            current = stripped
+        elif (
+            current is not None
+            and stripped.startswith("|")
+            and index + 1 < len(lines)
+            and is_table_separator(lines[index + 1])
+        ):
+            mapping[stripped] = current
+    return mapping
+
+
+@lru_cache(maxsize=4)
+def template_table_headers(template_name: str) -> list[str]:
+    """Expected Markdown table header rows, derived from the template file."""
+    return list(template_table_owners(template_name))
+
+
+def doc_heading_bodies(markdown_text: str) -> dict[str, str]:
+    """Map each document heading to the text directly under it (up to the next heading of any level)."""
+    lines = normalize_newlines(markdown_text).split("\n")
+    positions = [
+        (index, line.strip())
+        for index, line in enumerate(lines)
+        if re.match(r"^#{1,6}\s+\S", line.strip())
+    ]
+    bodies: dict[str, str] = {}
+    for index, (position, heading) in enumerate(positions):
+        end = positions[index + 1][0] if index + 1 < len(positions) else len(lines)
+        bodies[heading] = "\n".join(lines[position + 1 : end])
+    return bodies
+
+
+def is_uninvolved_chain(doc_bodies: dict[str, str], chain: list[str]) -> bool:
+    """True when any heading in the chain is marked 未涉及/不涉及 in the document."""
+    return any(
+        "未涉及" in doc_bodies.get(heading, "") or "不涉及" in doc_bodies.get(heading, "")
+        for heading in chain
+    )
+
+
+def template_requirement_exempt(
+    item: str,
+    template_name: str,
+    doc_bodies: dict[str, str],
+) -> bool:
+    """True when a missing required heading/table sits under a chapter marked 未涉及/不涉及."""
+    ancestors = template_heading_ancestors(template_name)
+    chain = ancestors.get(item)
+    if chain is None:
+        owner = template_table_owners(template_name).get(item)
+        if owner is None:
+            return False
+        chain = [owner, *ancestors.get(owner, [])]
+    return is_uninvolved_chain(doc_bodies, chain)
 
 
 def write_text(path: Path, text: str) -> None:
@@ -130,6 +217,23 @@ def write_text(path: Path, text: str) -> None:
 
 def normalize_newlines(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def strip_html_comments(markdown_text: str) -> str:
+    """Remove full-line HTML comments (template fill guidance) outside code fences."""
+    lines = normalize_newlines(markdown_text).split("\n")
+    in_fence = False
+    filtered: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            filtered.append(line)
+        elif not in_fence and stripped.startswith("<!--") and stripped.endswith("-->"):
+            continue
+        else:
+            filtered.append(line)
+    return "\n".join(filtered)
 
 
 def parse_remote_url(remote_url: str) -> tuple[str, str]:
@@ -492,21 +596,36 @@ def lint_markdown_text(
     template_name: str = "baseline",
     check_table_headers: bool = True,
 ) -> list[str]:
+    template = normalize_template_name(template_name)
+    if template == "raw":
+        # raw 模式不校验任何格式：任意本地 Markdown 直接发布
+        return []
     issues: list[str] = []
     normalized = normalize_newlines(markdown_text)
-    template = normalize_template_name(template_name)
 
     if "section_key" in normalized or "template_name" in normalized or "authoring_mode" in normalized:
         issues.append("template contains machine-only metadata; remove section_key/template_name/authoring_mode style fields")
 
+    if strip_html_comments(normalized) != normalized:
+        issues.append("document contains HTML comment lines (template guidance); remove them from the deliverable")
+
+    # 标注「未涉及/不涉及」的章节（含其子章节）豁免子标题与表头校验
+    doc_bodies = doc_heading_bodies(normalized)
+
     for heading in template_headings(template):
-        if heading not in normalized:
-            issues.append(f"missing required heading: {heading}")
+        if heading in normalized:
+            continue
+        if template_requirement_exempt(heading, template, doc_bodies):
+            continue
+        issues.append(f"missing required heading: {heading}")
 
     if check_table_headers:
         for table_header in template_table_headers(template):
-            if table_header not in normalized:
-                issues.append(f"missing required table header: {table_header}")
+            if table_header in normalized:
+                continue
+            if template_requirement_exempt(table_header, template, doc_bodies):
+                continue
+            issues.append(f"missing required table header: {table_header}")
 
     required_level1 = {h for h in template_headings(template) if h.startswith("## ")}
     present_level1 = {
@@ -531,7 +650,7 @@ def cmd_lint_doc(args: argparse.Namespace) -> int:
     input_path = Path(args.input).resolve()
     if not input_path.exists():
         return error(f"markdown file not found: {input_path}")
-    issues = lint_markdown_text(read_text(input_path), args.template)
+    issues = lint_markdown_text(read_text(input_path), resolve_template(args))
     if issues:
         for issue in issues:
             print(issue, file=sys.stderr)
@@ -541,11 +660,15 @@ def cmd_lint_doc(args: argparse.Namespace) -> int:
 
 
 def cmd_init_template(args: argparse.Namespace) -> int:
+    template = resolve_template(args)
+    if template == "raw":
+        return error("raw mode has no template file; create the markdown file directly and publish it with publish-md --template raw")
     output = Path(args.output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists() and not args.force:
         return error(f"output file exists: {output}")
-    shutil.copyfile(get_template_file(args.template), output)
+    # 模板中的指引注释只留在模板源文件，生成文档不允许携带
+    write_text(output, strip_html_comments(read_text(get_template_file(template))))
     print(output)
     return 0
 
@@ -596,7 +719,8 @@ def cmd_merge_clear(args: argparse.Namespace) -> int:
         return error(f"markdown file not found: {input_path}")
     if not patch_path.exists():
         return error(f"patch file not found: {patch_path}")
-    if normalize_template_name(args.template) != "baseline":
+    template = resolve_template(args)
+    if template != "baseline":
         return error("merge-clear only supports the baseline template")
 
     patch_data = json.loads(read_text(patch_path))
@@ -605,7 +729,7 @@ def cmd_merge_clear(args: argparse.Namespace) -> int:
 
     merged = merge_sections(read_text(input_path), patch_data)
     # merge-clear 为整章替换语义，章节内嵌模板表头可能被 patch 覆盖；只校验标题结构
-    issues = lint_markdown_text(merged, args.template, check_table_headers=False)
+    issues = lint_markdown_text(merged, template, check_table_headers=False)
     if issues:
         for issue in issues:
             print(issue, file=sys.stderr)
@@ -716,7 +840,7 @@ def markdown_to_storage(
     mermaid_images: list[str] | None = None,
     image_width: int | list[int] | None = None,
 ) -> str:
-    lines = normalize_newlines(markdown_text).split("\n")
+    lines = normalize_newlines(strip_html_comments(markdown_text)).split("\n")
     blocks: list[str] = []
     i = 0
     mermaid_index = 0
@@ -784,7 +908,7 @@ def markdown_to_storage(
 
 
 def markdown_to_paste_html(markdown_text: str) -> str:
-    lines = normalize_newlines(markdown_text).split("\n")
+    lines = normalize_newlines(strip_html_comments(markdown_text)).split("\n")
     blocks: list[str] = []
     i = 0
     while i < len(lines):
@@ -846,7 +970,7 @@ def cmd_prepare_paste_html(args: argparse.Namespace) -> int:
         return error(f"markdown file not found: {input_path}")
 
     markdown_text = read_text(input_path)
-    issues = lint_markdown_text(markdown_text, args.template)
+    issues = lint_markdown_text(markdown_text, resolve_template(args))
     if issues:
         warn_lint_issues(issues)
 
@@ -884,8 +1008,9 @@ def cmd_publish_md(args: argparse.Namespace) -> int:
     if not input_path.exists():
         return error(f"markdown file not found: {input_path}")
 
+    template = resolve_template(args)
     markdown_text = read_text(input_path)
-    issues = lint_markdown_text(markdown_text, args.template)
+    issues = lint_markdown_text(markdown_text, template)
     if issues:
         warn_lint_issues(issues)
 
@@ -931,9 +1056,23 @@ def cmd_publish_md(args: argparse.Namespace) -> int:
         "id": response["id"],
         "title": response["title"],
         "version": response["version"]["number"],
+        "template": template,
         "mermaidAttachments": len(uploaded_filenames),
     }, ensure_ascii=False))
     return 0
+
+
+def add_template_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--template",
+        choices=tuple(TEMPLATE_ALIASES),
+        default=None,
+        help=(
+            "template mode: baseline (default), 1-n, or raw (push any markdown "
+            "without structure validation); omitted values fall back to the "
+            "config file `template` field"
+        ),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -942,26 +1081,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_parser = sub.add_parser("init-template")
     init_parser.add_argument("--output", required=True)
-    init_parser.add_argument("--template", choices=tuple(TEMPLATE_ALIASES), default="baseline")
+    add_template_argument(init_parser)
     init_parser.add_argument("--force", action="store_true")
     init_parser.set_defaults(func=cmd_init_template)
 
     lint_parser = sub.add_parser("lint-doc")
     lint_parser.add_argument("--input", required=True)
-    lint_parser.add_argument("--template", choices=tuple(TEMPLATE_ALIASES), default="baseline")
+    add_template_argument(lint_parser)
     lint_parser.set_defaults(func=cmd_lint_doc)
 
     paste_parser = sub.add_parser("prepare-paste-html")
     paste_parser.add_argument("--input", required=True)
     paste_parser.add_argument("--output")
-    paste_parser.add_argument("--template", choices=tuple(TEMPLATE_ALIASES), default="baseline")
+    add_template_argument(paste_parser)
     paste_parser.set_defaults(func=cmd_prepare_paste_html)
 
     merge_parser = sub.add_parser("merge-clear")
     merge_parser.add_argument("--input", required=True)
     merge_parser.add_argument("--patch", required=True)
     merge_parser.add_argument("--output")
-    merge_parser.add_argument("--template", choices=tuple(TEMPLATE_ALIASES), default="baseline")
+    add_template_argument(merge_parser)
     merge_parser.set_defaults(func=cmd_merge_clear)
 
     check_parser = sub.add_parser("check-page")
@@ -997,7 +1136,7 @@ def build_parser() -> argparse.ArgumentParser:
     publish_parser.add_argument("--input", required=True)
     publish_parser.add_argument("--remote-url")
     publish_parser.add_argument("--title")
-    publish_parser.add_argument("--template", choices=tuple(TEMPLATE_ALIASES), default="baseline")
+    add_template_argument(publish_parser)
     publish_parser.add_argument("--auth-type", choices=("basic", "bearer", "none"))
     publish_parser.add_argument("--username")
     publish_parser.add_argument("--password")

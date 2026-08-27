@@ -1,4 +1,5 @@
 {
+  "template": "baseline",
   "baseUrl": "http://wiki.timevale.cn:8081",
   "pageId": "",
   "authType": "basic",
