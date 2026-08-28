@@ -1,0 +1,42 @@
+skills/tianyin-wiki/scripts/wiki_diagram.py
+  s_efb75c9df2f0af::t_a3c9dc67961a0b 22-23,31-32,38,47-52
+docs/bugfix/bugfix_0828_二次推送同名Mermaid附件阻断.md
+  s_efb75c9df2f0af::t_3bd526726544f5 227-228
+  s_efb75c9df2f0af::t_cf0e45801017b3 226
+  s_efb75c9df2f0af::t_ec2e24a182eed9 193-198
+  s_efb75c9df2f0af::t_6801e1c0a76ba8 1-192,199-225,229-237
+skills/tianyin-wiki/scripts/wiki_attachment_probe.py
+  s_efb75c9df2f0af::t_0a1acf703d2181 14,21-22,25-50
+skills/tianyin-wiki/references/remote-publish.md
+  s_efb75c9df2f0af::t_cf0e45801017b3 5,12,15
+skills/tianyin-wiki/references/cli-reference.md
+  s_efb75c9df2f0af::t_57918275d14507 12,95,113,123,126,133,139
+  s_efb75c9df2f0af::t_ec2e24a182eed9 96,102,104,136
+  s_efb75c9df2f0af::t_2b5ccf516bae02 101,108-110
+skills/tianyin-wiki/scripts/tianyin_wiki.py
+  s_efb75c9df2f0af::t_a3c9dc67961a0b 617,625-645,1264
+  s_efb75c9df2f0af::t_ec2e24a182eed9 520
+  s_efb75c9df2f0af::t_0a1acf703d2181 8,68-71,243-256,381-391,409,516-519,596-597,1068-1069,1071-1072,1074-1076,1082,1111-1114,1117-1120,1122-1168
+  s_efb75c9df2f0af::t_7892154ac92b3c 521-523
+  s_efb75c9df2f0af::t_4ab100ac993157 615-616
+  s_efb75c9df2f0af::t_7a60696ff7e003 618-619
+  s_efb75c9df2f0af::t_2f1ee76d5f024f 622-624
+  s_efb75c9df2f0af::t_8e66c4e87a7ac0 646-648
+  s_efb75c9df2f0af::t_9ea1bd0220d51a 524-542,582-584,591,621,649-663,1177-1178
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "07fc3083d6ae4b291be4ef02b2d149de7a30749f",
+  "prompts": {},
+  "sessions": {
+    "s_efb75c9df2f0af": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a047b6-f9e2-7bc1-a03a-9499ea3a51d8",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
