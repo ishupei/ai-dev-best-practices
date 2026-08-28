@@ -20,6 +20,7 @@ import uuid
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Callable
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -60,6 +61,9 @@ ALLOWED_CLEAR_TARGETS = {
     "11.2 回归测试": "### 11.2 回归测试",
 }
 
+# 远程 wiki API 调用统一超时，避免网络异常时 CLI 无限挂起
+HTTP_TIMEOUT = 60
+
 
 @dataclass
 class RuntimeConfig:
@@ -73,6 +77,14 @@ class RuntimeConfig:
 class RenderedMermaid:
     attachment_filename: str
     image_path: Path
+
+
+@dataclass(frozen=True)
+class TemplateStructure:
+    """Single parsed view of a template file (lint's single source of truth)."""
+    headings: list[str]                # required `## `/`### ` headings, in order
+    ancestors: dict[str, list[str]]   # heading -> chain of ancestor headings (closest first)
+    table_owners: dict[str, str]      # required table header row -> nearest preceding heading
 
 
 def error(message: str) -> int:
@@ -91,11 +103,23 @@ def normalize_template_name(template_name: str) -> str:
         raise ValueError(f"unsupported template: {template_name}") from exc
 
 
-def resolve_template(args: argparse.Namespace, fallback: str = "baseline") -> str:
-    """Effective template: explicit CLI flag > config file `template` field > fallback."""
+def resolve_template(args: argparse.Namespace, fallback: str = "raw") -> str:
+    """Effective template: explicit CLI flag > config file `template` field > fallback (raw).
+
+    Config `template` stores template-generation preferences only (baseline/1-n);
+    raw is the built-in default and must not be stored in the config file.
+    """
     config_data = load_config_file()
-    value = getattr(args, "template", None) or config_data.get("template") or fallback
-    return normalize_template_name(str(value).strip())
+    explicit = getattr(args, "template", None)
+    if explicit:
+        return normalize_template_name(str(explicit).strip())
+    configured = str(config_data.get("template") or "").strip()
+    if configured:
+        normalized = normalize_template_name(configured)
+        if normalized == "raw":
+            raise ValueError("config `template` must be baseline or 1-n; raw is the built-in default and cannot be stored in the config file")
+        return normalized
+    return normalize_template_name(fallback)
 
 
 def get_template_file(template_name: str) -> Path:
@@ -111,64 +135,56 @@ def get_template_file(template_name: str) -> Path:
 
 
 @lru_cache(maxsize=4)
-def template_headings(template_name: str) -> list[str]:
-    """Expected `## `/`### ` headings, derived from the template file (single source of truth)."""
+def parse_template(template_name: str) -> TemplateStructure:
+    """Parse a template file once into headings, ancestor chains and table owners."""
     if normalize_template_name(template_name) == "raw":
-        return []
-    text = read_text(get_template_file(template_name))
-    return [
-        line.strip()
-        for line in normalize_newlines(text).split("\n")
-        if re.match(r"^#{2,3}\s+\S", line.strip())
-    ]
-
-
-@lru_cache(maxsize=4)
-def template_heading_ancestors(template_name: str) -> dict[str, list[str]]:
-    """Map each template heading to the chain of its ancestor headings (closest first)."""
-    if normalize_template_name(template_name) == "raw":
-        return {}
+        return TemplateStructure([], {}, {})
     lines = normalize_newlines(read_text(get_template_file(template_name))).split("\n")
-    stack: list[tuple[int, str]] = []
+    headings: list[str] = []
     ancestors: dict[str, list[str]] = {}
-    for line in lines:
-        stripped = line.strip()
-        if not re.match(r"^#{1,6}\s+\S", stripped):
-            continue
-        level = len(stripped) - len(stripped.lstrip("#"))
-        while stack and stack[-1][0] >= level:
-            stack.pop()
-        ancestors[stripped] = [heading for _, heading in stack]
-        stack.append((level, stripped))
-    return ancestors
-
-
-@lru_cache(maxsize=4)
-def template_table_owners(template_name: str) -> dict[str, str]:
-    """Map each required table header row to its nearest preceding template heading."""
-    if normalize_template_name(template_name) == "raw":
-        return {}
-    lines = normalize_newlines(read_text(get_template_file(template_name))).split("\n")
+    table_owners: dict[str, str] = {}
+    stack: list[tuple[int, str]] = []
     current: str | None = None
-    mapping: dict[str, str] = {}
     for index, line in enumerate(lines):
         stripped = line.strip()
-        if re.match(r"^#{1,6}\s+\S", stripped):
+        match = re.match(r"^(#{1,6})\s+(\S.*)$", stripped)
+        if match:
+            level = len(match.group(1))
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            ancestors[stripped] = [heading for _, heading in stack]
+            stack.append((level, stripped))
             current = stripped
+            if 2 <= level <= 3:
+                headings.append(stripped)
         elif (
             current is not None
             and stripped.startswith("|")
             and index + 1 < len(lines)
             and is_table_separator(lines[index + 1])
         ):
-            mapping[stripped] = current
-    return mapping
+            table_owners[stripped] = current
+    return TemplateStructure(headings, ancestors, table_owners)
 
 
-@lru_cache(maxsize=4)
+def template_headings(template_name: str) -> list[str]:
+    """Expected `## `/`### ` headings, derived from the template file (single source of truth)."""
+    return parse_template(template_name).headings
+
+
+def template_heading_ancestors(template_name: str) -> dict[str, list[str]]:
+    """Map each template heading to the chain of its ancestor headings (closest first)."""
+    return parse_template(template_name).ancestors
+
+
+def template_table_owners(template_name: str) -> dict[str, str]:
+    """Map each required table header row to its nearest preceding template heading."""
+    return parse_template(template_name).table_owners
+
+
 def template_table_headers(template_name: str) -> list[str]:
     """Expected Markdown table header rows, derived from the template file."""
-    return list(template_table_owners(template_name))
+    return list(parse_template(template_name).table_owners)
 
 
 def doc_heading_bodies(markdown_text: str) -> dict[str, str]:
@@ -317,6 +333,18 @@ def load_runtime_config(args: argparse.Namespace) -> RuntimeConfig:
     return RuntimeConfig(remote_url=remote_url, base_url=base_url, page_id=page_id, headers=headers)
 
 
+def http_error_message(exc: urllib.error.HTTPError) -> str:
+    """One-line HTTP error detail, including the server body when present."""
+    try:
+        response_body = exc.read().decode("utf-8", errors="replace")
+    except Exception:
+        response_body = ""
+    detail = f"HTTP {exc.code} {exc.reason}"
+    if response_body.strip():
+        detail += f": {response_body}"
+    return detail
+
+
 def request_json(method: str, url: str, headers: dict[str, str], body: dict | None = None) -> dict:
     data = None
     request_headers = dict(headers)
@@ -325,17 +353,10 @@ def request_json(method: str, url: str, headers: dict[str, str], body: dict | No
         request_headers["Content-Type"] = "application/json; charset=utf-8"
     request = urllib.request.Request(url=url, method=method, headers=request_headers, data=data)
     try:
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        try:
-            response_body = exc.read().decode("utf-8", errors="replace")
-        except Exception:
-            response_body = ""
-        detail = f"HTTP {exc.code} {exc.reason}"
-        if response_body.strip():
-            detail += f": {response_body}"
-        raise RuntimeError(detail) from exc
+        raise RuntimeError(http_error_message(exc)) from exc
 
 
 def request_multipart_file(url: str, headers: dict[str, str], file_path: Path) -> dict:
@@ -358,17 +379,10 @@ def request_multipart_file(url: str, headers: dict[str, str], file_path: Path) -
     request_headers["X-Atlassian-Token"] = "no-check"
     request = urllib.request.Request(url=url, method="POST", headers=request_headers, data=body)
     try:
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        try:
-            response_body = exc.read().decode("utf-8", errors="replace")
-        except Exception:
-            response_body = ""
-        detail = f"HTTP {exc.code} {exc.reason}"
-        if response_body.strip():
-            detail += f": {response_body}"
-        raise RuntimeError(detail) from exc
+        raise RuntimeError(http_error_message(exc)) from exc
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -662,7 +676,7 @@ def cmd_lint_doc(args: argparse.Namespace) -> int:
 def cmd_init_template(args: argparse.Namespace) -> int:
     template = resolve_template(args)
     if template == "raw":
-        return error("raw mode has no template file; create the markdown file directly and publish it with publish-md --template raw")
+        return error("raw is the default and has no template file; pass --template baseline or 1-n to generate from a template, or create the markdown file directly")
     output = Path(args.output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists() and not args.force:
@@ -719,7 +733,8 @@ def cmd_merge_clear(args: argparse.Namespace) -> int:
         return error(f"markdown file not found: {input_path}")
     if not patch_path.exists():
         return error(f"patch file not found: {patch_path}")
-    template = resolve_template(args)
+    # merge-clear 只支持基线模板，缺省即 baseline，不随全局默认（raw）变化
+    template = resolve_template(args, fallback="baseline")
     if template != "baseline":
         return error("merge-clear only supports the baseline template")
 
@@ -736,10 +751,7 @@ def cmd_merge_clear(args: argparse.Namespace) -> int:
         return 1
 
     write_text(output_path, merged)
-    if output_path == input_path:
-        print(str(output_path))
-    else:
-        print(str(output_path))
+    print(str(output_path))
     return 0
 
 
@@ -835,12 +847,18 @@ def render_list(lines: list[str]) -> str:
     return "".join(html_parts)
 
 
-def markdown_to_storage(
+def markdown_to_html_blocks(
     markdown_text: str,
+    render_code_block: Callable[[list[str]], str],
     mermaid_images: list[str] | None = None,
     image_width: int | list[int] | None = None,
 ) -> str:
-    lines = normalize_newlines(strip_html_comments(markdown_text)).split("\n")
+    """Convert markdown (guidance comments stripped) into Confluence-ish HTML blocks.
+
+    Shared by publish (storage HTML with rendered Mermaid attachments) and paste
+    (plain pre/code blocks); only the code renderer differs per consumer.
+    """
+    lines = strip_html_comments(markdown_text).split("\n")
     blocks: list[str] = []
     i = 0
     mermaid_index = 0
@@ -855,7 +873,7 @@ def markdown_to_storage(
             continue
         if stripped.startswith("```"):
             language = stripped[3:].strip().lower()
-            code_lines = []
+            code_lines: list[str] = []
             i += 1
             while i < len(lines) and not lines[i].strip().startswith("```"):
                 code_lines.append(lines[i])
@@ -868,7 +886,7 @@ def markdown_to_storage(
                 blocks.append(render_attachment_image(mermaid_images[mermaid_index], width))
                 mermaid_index += 1
             else:
-                blocks.append(render_code(code_lines))
+                blocks.append(render_code_block(code_lines))
             continue
         if stripped.startswith("#"):
             level = min(max(len(stripped) - len(stripped.lstrip("#")), 1), 6)
@@ -907,61 +925,16 @@ def markdown_to_storage(
     return "".join(blocks)
 
 
+def markdown_to_storage(
+    markdown_text: str,
+    mermaid_images: list[str] | None = None,
+    image_width: int | list[int] | None = None,
+) -> str:
+    return markdown_to_html_blocks(markdown_text, render_code, mermaid_images, image_width)
+
+
 def markdown_to_paste_html(markdown_text: str) -> str:
-    lines = normalize_newlines(strip_html_comments(markdown_text)).split("\n")
-    blocks: list[str] = []
-    i = 0
-    while i < len(lines):
-        stripped = lines[i].strip()
-        if not stripped:
-            i += 1
-            continue
-        if stripped == "---":
-            blocks.append("<hr />")
-            i += 1
-            continue
-        if stripped.startswith("```"):
-            code_lines = []
-            i += 1
-            while i < len(lines) and not lines[i].strip().startswith("```"):
-                code_lines.append(lines[i])
-                i += 1
-            i += 1
-            blocks.append(render_code_for_paste(code_lines))
-            continue
-        if stripped.startswith("#"):
-            level = min(max(len(stripped) - len(stripped.lstrip("#")), 1), 6)
-            title = stripped[level:].strip()
-            blocks.append(f"<h{level}>{convert_inline(title)}</h{level}>")
-            i += 1
-            continue
-        if stripped.startswith("|"):
-            table_lines = [lines[i]]
-            i += 1
-            while i < len(lines) and lines[i].strip().startswith("|"):
-                table_lines.append(lines[i])
-                i += 1
-            blocks.append(render_table(table_lines))
-            continue
-        if re.match(r"^\s*(?:-|\d+\.)\s+", lines[i]):
-            list_lines = [lines[i]]
-            i += 1
-            while i < len(lines) and (not lines[i].strip() or re.match(r"^\s*(?:-|\d+\.)\s+", lines[i])):
-                if lines[i].strip():
-                    list_lines.append(lines[i])
-                i += 1
-            blocks.append(render_list(list_lines))
-            continue
-        paragraph_lines = [lines[i].strip()]
-        i += 1
-        while i < len(lines):
-            candidate = lines[i].strip()
-            if not candidate or candidate.startswith("#") or candidate.startswith("|") or candidate == "---" or candidate.startswith("```") or re.match(r"^\s*(?:-|\d+\.)\s+", lines[i]):
-                break
-            paragraph_lines.append(candidate)
-            i += 1
-        blocks.append(f"<p>{convert_inline(' '.join(paragraph_lines))}</p>")
-    return "<html><body>" + "".join(blocks) + "</body></html>"
+    return "<html><body>" + markdown_to_html_blocks(markdown_text, render_code_for_paste) + "</body></html>"
 
 
 def cmd_prepare_paste_html(args: argparse.Namespace) -> int:
@@ -1017,6 +990,7 @@ def cmd_publish_md(args: argparse.Namespace) -> int:
     try:
         config = load_runtime_config(args)
         page = fetch_page(config)
+        next_version = int(page["version"]["number"]) + 1
         with tempfile.TemporaryDirectory(prefix="tianyin-mermaid-") as temp_dir:
             diagrams = render_mermaid_diagrams(
                 markdown_text,
@@ -1024,11 +998,6 @@ def cmd_publish_md(args: argparse.Namespace) -> int:
                 Path(temp_dir),
                 args.mermaid_scale,
             )
-            uploaded_filenames: set[str] = set()
-            for diagram in diagrams:
-                if diagram.attachment_filename not in uploaded_filenames:
-                    upload_attachment(config, diagram.image_path)
-                    uploaded_filenames.add(diagram.attachment_filename)
             if args.image_width is None:
                 image_widths: list[int | None] = [diagram_image_width(diagram.image_path) for diagram in diagrams]
             else:
@@ -1038,12 +1007,35 @@ def cmd_publish_md(args: argparse.Namespace) -> int:
                 [diagram.attachment_filename for diagram in diagrams],
                 image_widths,
             )
+            # 写入前打印目标页与版本变化；--dry-run 只读到这一步，不做任何写入
+            print(
+                f"publishing: {page.get('title', '')} (page {page['id']}, "
+                f"version {page['version']['number']} -> {next_version})",
+                file=sys.stderr,
+            )
+            if args.dry_run:
+                print(json.dumps({
+                    "dryRun": True,
+                    "id": page["id"],
+                    "title": args.title or page["title"],
+                    "version": page["version"]["number"],
+                    "nextVersion": next_version,
+                    "template": template,
+                    "mermaidAttachments": len(diagrams),
+                    "storageLength": len(storage_html),
+                }, ensure_ascii=False))
+                return 0
+            uploaded_filenames: set[str] = set()
+            for diagram in diagrams:
+                if diagram.attachment_filename not in uploaded_filenames:
+                    upload_attachment(config, diagram.image_path)
+                    uploaded_filenames.add(diagram.attachment_filename)
             endpoint = f"{config.base_url.rstrip('/')}/rest/api/content/{config.page_id}"
             payload = {
                 "id": page["id"],
                 "type": page["type"],
                 "title": args.title or page["title"],
-                "version": {"number": int(page["version"]["number"]) + 1},
+                "version": {"number": next_version},
                 "body": {"storage": {"value": storage_html, "representation": "storage"}},
             }
             if page.get("space", {}).get("key"):
@@ -1068,9 +1060,11 @@ def add_template_argument(parser: argparse.ArgumentParser) -> None:
         choices=tuple(TEMPLATE_ALIASES),
         default=None,
         help=(
-            "template mode: baseline (default), 1-n, or raw (push any markdown "
-            "without structure validation); omitted values fall back to the "
-            "config file `template` field"
+            "template mode: raw (default; push any markdown without structure "
+            "validation), baseline, 1-n, or default (= baseline, for generating "
+            "local design docs only); config `template` accepts baseline/1-n only; "
+            "omitted values fall back to config, then raw; init-template requires "
+            "an explicit baseline/1-n/default"
         ),
     )
 
@@ -1149,6 +1143,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="fixed Confluence image display width in px; default auto = half of intrinsic width, capped at 500; 0 disables explicit width",
     )
+    publish_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="read-only pre-check: fetch the target page and build the storage HTML without uploading attachments or updating the page",
+    )
     publish_parser.set_defaults(func=cmd_publish_md)
 
     return parser
@@ -1159,7 +1158,9 @@ def main() -> int:
     args = parser.parse_args()
     try:
         return args.func(args)
-    except (ValueError, RuntimeError, FileNotFoundError, json.JSONDecodeError) as exc:
+    except (ValueError, RuntimeError, OSError, KeyError) as exc:
+        # ValueError 已覆盖 JSONDecodeError，OSError 已覆盖 FileNotFoundError；
+        # KeyError 兜底 API 返回结构异常，统一转成一行错误而非堆栈
         return error(str(exc))
 
 

@@ -18,8 +18,8 @@
 - 旧版本曾把个人配置放在 `%USERPROFILE%\.tianyin-wiki\config.json` 或 `scripts\tianyin-wiki.config.json`（skill 目录内）；发现这些历史文件时会读取并提示迁移到用户配置目录，请迁移后删除。
 - 可用环境变量 `CONFLUENCE_CONFIG=<path>` 指向自己的配置文件（支持 `~` 展开），优先于默认路径。
 - 配置字段支持：`template`、`remoteUrl`、`baseUrl`、`pageId`、`authType`、`username`、`password`、`token`。
-- `template` 为默认模板模式，可选 `baseline`（默认）、`1-n`、`raw`（别名 `direct`）；`raw` = 不校验任何格式，直接发布任意本地 Markdown。未传 `--template` 时所有命令默认读取该字段。
-- 参数优先级：命令行显式参数 > 配置文件 > 环境变量；`--template` 未显式指定时取配置 `template` 字段，再缺省 `baseline`。
+- `template` 为默认模板模式，**仅允许存储 `baseline` 或 `1-n`**；`raw` 是内置默认（不校验格式直推），不允许写入配置，写入 `raw`/`direct` 会报错。未传 `--template` 时所有命令默认读取该字段。
+- 参数优先级：命令行显式参数 > 配置文件 > 环境变量；`--template` 未显式指定时取配置 `template` 字段，再缺省 `raw`（`init-template` 需显式指定 `baseline`/`1-n`；`merge-clear` 固定 `baseline`）。
 - 凭据也可经环境变量注入：`CONFLUENCE_USERNAME`、`CONFLUENCE_PASSWORD`、`CONFLUENCE_TOKEN`、`CONFLUENCE_AUTH_TYPE`。
 - 配置文件中已提供 `baseUrl` 和 `pageId` 时，`check-page`、`publish-md` 可省略 `--remote-url`。
 - 不要在终端、对话或文档中回显认证值。
@@ -42,11 +42,11 @@ python .\scripts\tianyin_wiki.py init-template --template 1-n --output .\outputs
 
 `--template` 支持：
 
-- `baseline`：基线详设模板，默认值。
-- `1-n`：1-N 详设模板，来源页面 `pageId=224905569`。
-- `raw`（别名 `direct`）：无模板文件，`init-template` 不支持该模式；用于 `publish-md` 直推任意本地 Markdown。
-- 为兼容已使用的命令，`default` 等同于 `baseline`。
-- 未显式传 `--template` 时，默认读取配置文件 `template` 字段（见「默认配置」）。
+- `raw`（别名 `direct`）：默认模式，不校验任何格式直推本地 Markdown；`init-template` 不支持，未显式指定模板时会报错提示。
+- `baseline`：基线详设模板，需显式指定。
+- `1-n`：1-N 详设模板，来源页面 `pageId=224905569`，需显式指定。
+- `default`：生成详设流程的缺省模板，等同 `baseline`；仅在「上下文未指定文档、需生成天印本地 md 再推送」的场景使用。
+- 未显式传 `--template` 时，先取配置文件 `template` 字段（仅 `baseline`/`1-n`），再缺省 `raw`（见「默认配置」）。
 
 ### `publish-md`
 
@@ -70,11 +70,19 @@ python .\scripts\tianyin_wiki.py publish-md --template 1-n --input .\outputs\1-n
 python .\scripts\tianyin_wiki.py publish-md --input .\outputs\detail-design.md
 ```
 
-直推任意本地 Markdown（`raw` 模式，不校验任何格式，无结构告警）：
+直推任意本地 Markdown（默认即 `raw` 模式，无需指定，不校验任何格式、无结构告警）：
 
 ```powershell
-python .\scripts\tianyin_wiki.py publish-md --template raw --input .\outputs\任意文档.md --remote-url "http://wiki.timevale.cn:8081/pages/viewpage.action?pageId=123456"
+python .\scripts\tianyin_wiki.py publish-md --input .\outputs\任意文档.md --remote-url "http://wiki.timevale.cn:8081/pages/viewpage.action?pageId=123456"
 ```
+
+发布前预检（只读：拉取目标页、渲染并构建 storage HTML，**不传附件、不更新页面**，输出 dryRun 报告）：
+
+```powershell
+python .\scripts\tianyin_wiki.py publish-md --dry-run --input .\outputs\detail-design.md --remote-url "http://wiki.timevale.cn:8081/pages/viewpage.action?pageId=123456"
+```
+
+无论是否 `--dry-run`，实际写入前都会向 stderr 打印目标页与版本变化：`publishing: <标题> (page <id>, version N -> N+1)`，用于确认没有写错页面。
 
 支持认证参数：
 
@@ -135,11 +143,11 @@ python .\scripts\wiki_attachment_probe.py --remote-url "<wiki-url>" --filename "
 python .\scripts\tianyin_wiki.py lint-doc --input .\outputs\detail-design.md
 ```
 
-所有章节均为非必填：章节下标注「未涉及/不涉及」时，自动豁免该章节（含其子章节）的子标题与表头校验，例如接口详情仅填写「未涉及」时不要求请求/响应参数表。
+所有章节均为非必填：章节下标注「未涉及/不涉及」时，自动豁免该章节（含其子章节）的子标题与表头校验，例如接口详情仅填写「未涉及」时不要求请求/响应参数表。章节填写指引以模板内 `<!-- ... -->` 注释为唯一指引源（`references/templates/`），本文档仅为摘要。
+
+`lint-doc` 默认 `raw` 模式（不校验任何格式，恒输出 `OK`）；按模板校验需显式 `--template baseline|1-n`。
 
 文档含有 HTML 注释行（模板指引未清理）时报错：`document contains HTML comment lines (template guidance); remove them from the deliverable`。
-
-`--template raw` 不校验任何格式，恒输出 `OK`；`init-template` 与 `merge-clear` 不支持 `raw` 模式。
 
 ### `prepare-paste-html`
 

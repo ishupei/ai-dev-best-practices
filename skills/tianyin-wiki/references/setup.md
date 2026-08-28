@@ -12,7 +12,7 @@
 
 - 个人配置统一存放：`%USERPROFILE%\.config\tianyin-wiki\config.json`（macOS/Linux 为 `~/.config/tianyin-wiki/config.json`）。
 - 配置字段：`template`、`remoteUrl`、`baseUrl`、`pageId`、`authType`、`username`、`password`、`token`。
-- `template`：默认模板模式，可选 `baseline`（缺省）、`1-n`、`raw`（别名 `direct`）。`raw` = 不校验任何格式，直接发布任意本地 Markdown。所有命令未显式传 `--template` 时默认读取该字段。
+- `template`：默认模板模式，**仅允许 `baseline` 或 `1-n`**（`raw` 为内置默认，不允许写入配置，写入会报错）。所有命令未显式传 `--template` 时默认读取该字段，未配置时缺省 `raw`（`init-template` 需显式指定 `baseline`/`1-n`）。
 - **不随 skill 分发、不提交版本库**；分发物只含 `scripts/tianyin-wiki.config.sample.json` 样例，复制后填写自己的值。
 - 旧版本曾放在 `%USERPROFILE%\.tianyin-wiki\config.json` 或 skill 目录 `scripts\tianyin-wiki.config.json`；CLI 发现历史文件时会提示迁移，迁移后请删除。
 

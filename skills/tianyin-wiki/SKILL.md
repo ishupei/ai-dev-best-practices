@@ -9,32 +9,35 @@ description: 生成或更新天印基线详设/1-N 详设 Markdown（基于 PRD�
 
 ## 何时使用
 
-- 用户要求生成/更新基线详设或 1-N 详设（触发词：`基线`、`1-N`、`详设`、`wiki`）。
-- 用户要求将本地任意 Markdown 文档直接发布/同步到 Confluence（`raw` 模式，不校验格式）。
-- 用户明确要求将本地详设发布/同步到 Confluence。
+- 用户要求将本地任意 Markdown 文档直接发布/同步到 Confluence（触发词：`推送`、`发布`、`同步`、`wiki`）。表述如「把这个文档推送」「指定一个文档进行推送」一律走 `raw` 直推（默认模式，不校验格式）。
+- 用户要求生成/更新基线详设或 1-N 详设（触发词：`基线`、`1-N`、`详设`）时，才使用模板生成；**使用模板前必须与用户确认是基线还是 1-N，不得擅自猜测**。
+
+**决策规则**：上下文已指定要推送的文档 → 走 `raw` 直推，不生成、不校验；上下文未指定文档、要求「生成/生成详设」、需结合上下文生成天印本地 md 再推送 → 才考虑模板生成（`--template default` 为生成流程缺省模板，等同基线），确认基线/1-N 后 `init-template` 生成 → 填充 → `lint-doc` 自查 → 推送。
 
 ## 三种模式
 
 | 模式 | CLI 标识 | 说明 |
 |---|---|---|
-| 基线详设 | `baseline`（默认） | 按基线模板生成并校验结构 |
-| 1-N 详设 | `1-n` | 按 1-N 模板生成并校验结构 |
-| 直推本地 md | `raw`（别名 `direct`） | 不校验任何格式，直接把本地 Markdown 转为 wiki 页面 |
+| 直推本地 md | `raw`（别名 `direct`，**默认**） | 不校验任何格式，直接把本地 Markdown 转为 wiki 页面 |
+| 基线详设 | `baseline` | 按基线模板生成并校验结构，需显式指定 |
+| 1-N 详设 | `1-n` | 按 1-N 模板生成并校验结构，需显式指定 |
 
-默认模式取自个人配置文件 `template` 字段（`baseline`/`1-n`/`raw`）；未配置时缺省 `baseline`。命令行显式传 `--template` 优先于配置文件。
+- 默认模式为 `raw`；命令行显式传 `--template` 优先于配置文件，配置文件 `template` 字段其次（**仅允许 `baseline`/`1-n`，`raw` 是内置默认、不允许写入配置**），未配置时缺省 `raw`。
+- `--template default` 等同 `baseline`，仅在生成详设流程使用。
+- 模板只在用户显式要求基线或 1-N 时使用，二选一必须确认。
 
 ## 输出约定（生成本地详设时）
 
 - **输出路径**：优先使用文档约定路径（如 `docs/<功能目录名>/`）；无约定时输出到工作目录 `docs/` 下。
 - **输出文件名**：`DESIGN-<功能名>.md`（功能名按上下文确定，如 `DESIGN-电子签章.md`）。
-- **非必填章节**：所有章节均为非必填；生成文档时如某章节确实不涉及（如无接口新增/变更），保留标题并填写「未涉及」，不要编造内容。模板内 `<!-- ... -->` 注释为填写指引，只存在于模板源文件：`init-template` 复制时自动剔除、`lint-doc` 校验交付文档不得含注释行、发布/粘贴转换兜底剔除，**生成文档一律不携带注释**。
+- **非必填章节**：所有章节均为非必填；生成文档时如某章节确实不涉及（如无接口新增/变更），保留标题并填写「未涉及」，不要编造内容。章节填写指引**以模板内注释（`references/templates/` 中的 `<!-- ... -->`）为唯一指引源**，本处与 cli-reference.md 中的相关表述仅为摘要；注释只存在于模板源文件：`init-template` 复制时自动剔除、`lint-doc` 校验交付文档不得含注释行、发布/粘贴转换兜底剔除，**生成文档一律不携带注释**。
 
 ## 最小流程
 
-1. 初始化模板：`python .\scripts\tianyin_wiki.py init-template [--template 1-n] --output <file>.md`（不传 `--template` 时默认读取配置 `template` 字段）。
-2. 填充内容后用 `lint-doc` 本地自查；发布时结构差异（缺项/多项）仅提示、不阻断推送。
-3. 直推任意本地文档（不校验格式）：`python .\scripts\tianyin_wiki.py publish-md --template raw --input <file>.md`。
-4. 仅当用户**明确确认**（且上下文中已提供目标地址）时发布：`publish-md --remote-url "<wiki-url>"`。
+1. 初始化模板需**显式指定**：`python .\scripts\tianyin_wiki.py init-template --template baseline|1-n --output <file>.md`（默认 raw 无模板文件，不指定会报错提示）。
+2. 填充内容后用 `lint-doc --template baseline|1-n` 本地自查；发布时结构差异（缺项/多项）仅提示、不阻断推送。
+3. 直推任意本地文档（默认 raw，不校验格式）：`python .\scripts\tianyin_wiki.py publish-md --input <file>.md`。
+4. 发布前可先 `publish-md --dry-run` 确认目标页、版本变化与内容摘要（只读、不写 wiki），再在用户**明确确认**（且上下文中已提供目标地址）后发布：`publish-md --remote-url "<wiki-url>"`。
 
 ## 执行边界（必须遵守）
 
