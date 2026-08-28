@@ -84,6 +84,8 @@ python .\scripts\tianyin_wiki.py publish-md --dry-run --input .\outputs\detail-d
 
 无论是否 `--dry-run`，实际写入前都会向 stderr 打印目标页与版本变化：`publishing: <标题> (page <id>, version N -> N+1)`，用于确认没有写错页面。
 
+主标题约定：文档正文第一个一级标题（主标题）仅保留在本地 md，推送/粘贴转换时自动剔除，Confluence 页面标题即主标题；未传 `--title` 时页面标题自动取文档主标题，无主标题则沿用页面现有标题。
+
 支持认证参数：
 
 - `--auth-type basic|bearer|none`
@@ -144,6 +146,8 @@ python .\scripts\tianyin_wiki.py lint-doc --input .\outputs\detail-design.md
 ```
 
 所有章节均为非必填：章节下标注「未涉及/不涉及」时，自动豁免该章节（含其子章节）的子标题与表头校验，例如接口详情仅填写「未涉及」时不要求请求/响应参数表。章节填写指引以模板内 `<!-- ... -->` 注释为唯一指引源（`references/templates/`），本文档仅为摘要。
+
+模板文档必须以一级标题（主标题）开头（本地保留、推送剔除），缺少时 lint 报错；主标题不参与「多余一级章节」校验。基线模板章节为一级标题（`# 1.方案背景`），1-N 保持二级（`## 一、`）。
 
 `lint-doc` 默认 `raw` 模式（不校验任何格式，恒输出 `OK`）；按模板校验需显式 `--template baseline|1-n`。
 

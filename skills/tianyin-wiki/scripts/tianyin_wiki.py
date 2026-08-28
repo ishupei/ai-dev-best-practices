@@ -49,16 +49,16 @@ TEMPLATE_ALIASES = {
 }
 
 ALLOWED_CLEAR_TARGETS = {
-    "1.方案背景": "## 1.方案背景",
-    "2.需求评估表": "## 2.需求评估表",
-    "4.需求功能点": "## 4.需求功能点",
-    "5.业务流程设计": "## 5.业务流程设计",
-    "6.业务功能设计": "## 6.业务功能设计",
-    "7.数据库设计": "## 7.数据库设计",
-    "8.安全设计": "## 8.安全设计",
-    "9.交付运维影响": "## 9.交付运维影响",
-    "11.1 风险点": "### 11.1 风险点",
-    "11.2 回归测试": "### 11.2 回归测试",
+    "1.方案背景": "# 1.方案背景",
+    "2.需求评估表": "# 2.需求评估表",
+    "4.需求功能点": "# 4.需求功能点",
+    "5.业务流程设计": "# 5.业务流程设计",
+    "6.业务功能设计": "# 6.业务功能设计",
+    "7.数据库设计": "# 7.数据库设计",
+    "8.安全设计": "# 8.安全设计",
+    "9.交付运维影响": "# 9.交付运维影响",
+    "11.1 风险点": "## 11.1 风险点",
+    "11.2 回归测试": "## 11.2 回归测试",
 }
 
 # 远程 wiki API 调用统一超时，避免网络异常时 CLI 无限挂起
@@ -155,7 +155,7 @@ def parse_template(template_name: str) -> TemplateStructure:
             ancestors[stripped] = [heading for _, heading in stack]
             stack.append((level, stripped))
             current = stripped
-            if 2 <= level <= 3:
+            if 1 <= level <= 3:
                 headings.append(stripped)
         elif (
             current is not None
@@ -250,6 +250,20 @@ def strip_html_comments(markdown_text: str) -> str:
         else:
             filtered.append(line)
     return "\n".join(filtered)
+
+
+def extract_main_title(markdown_text: str) -> str | None:
+    """Document main title: the first level-1 heading when it opens the document.
+
+    The local md keeps it as the file title; the wiki page title replaces it, so
+    wiki-bound conversions strip it from the body.
+    """
+    for line in normalize_newlines(markdown_text).split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        return stripped if re.match(r"^#\s+\S", stripped) else None
+    return None
 
 
 def parse_remote_url(remote_url: str) -> tuple[str, str]:
@@ -623,6 +637,10 @@ def lint_markdown_text(
     if strip_html_comments(normalized) != normalized:
         issues.append("document contains HTML comment lines (template guidance); remove them from the deliverable")
 
+    # 模板文档必须以一级标题（主标题）开头：本地保留，推送时由页面标题取代
+    if extract_main_title(normalized) is None:
+        issues.append("missing main title: start the document with a level-1 heading (e.g. `# <文档名>`)")
+
     # 标注「未涉及/不涉及」的章节（含其子章节）豁免子标题与表头校验
     doc_bodies = doc_heading_bodies(normalized)
 
@@ -641,13 +659,17 @@ def lint_markdown_text(
                 continue
             issues.append(f"missing required table header: {table_header}")
 
-    required_level1 = {h for h in template_headings(template) if h.startswith("## ")}
+    required_level1 = {h for h in template_headings(template) if h.startswith("# ") and not h.startswith("## ")}
     present_level1 = {
         line.strip()
         for line in normalized.split("\n")
-        if line.strip().startswith("## ") and not line.strip().startswith("### ")
+        if line.strip().startswith("# ") and not line.strip().startswith("## ")
     }
-    for heading in sorted(present_level1 - required_level1):
+    unexpected = present_level1 - required_level1
+    main_title = extract_main_title(normalized)
+    if main_title:
+        unexpected.discard(main_title)  # 主标题保留在本地 md，不视为多余章节
+    for heading in sorted(unexpected):
         issues.append(f"unexpected top-level heading: {heading}")
 
     return issues
@@ -861,6 +883,10 @@ def markdown_to_html_blocks(
     lines = strip_html_comments(markdown_text).split("\n")
     blocks: list[str] = []
     i = 0
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    if i < len(lines) and re.match(r"^#\s+\S", lines[i].strip()):
+        i += 1  # 主标题只保留在本地 md，wiki 页面标题即主标题，正文剔除
     mermaid_index = 0
     while i < len(lines):
         stripped = lines[i].strip()
@@ -990,6 +1016,9 @@ def cmd_publish_md(args: argparse.Namespace) -> int:
     try:
         config = load_runtime_config(args)
         page = fetch_page(config)
+        # 页面标题：--title > 文档主标题（正文第一个一级标题，去掉 # 前缀）> 页面现有标题
+        main_title = extract_main_title(markdown_text)
+        title = args.title or (main_title[2:].strip() if main_title else "") or page["title"]
         next_version = int(page["version"]["number"]) + 1
         with tempfile.TemporaryDirectory(prefix="tianyin-mermaid-") as temp_dir:
             diagrams = render_mermaid_diagrams(
@@ -1017,7 +1046,7 @@ def cmd_publish_md(args: argparse.Namespace) -> int:
                 print(json.dumps({
                     "dryRun": True,
                     "id": page["id"],
-                    "title": args.title or page["title"],
+                    "title": title,
                     "version": page["version"]["number"],
                     "nextVersion": next_version,
                     "template": template,
@@ -1034,7 +1063,7 @@ def cmd_publish_md(args: argparse.Namespace) -> int:
             payload = {
                 "id": page["id"],
                 "type": page["type"],
-                "title": args.title or page["title"],
+                "title": title,
                 "version": {"number": next_version},
                 "body": {"storage": {"value": storage_html, "representation": "storage"}},
             }
