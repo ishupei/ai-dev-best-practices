@@ -9,7 +9,7 @@
 - 远程发布前建议先执行 `lint-doc` 自查；发布时模板结构校验差异（缺项/多项）仅提示，不阻断推送。
 - REST 发布失败时先执行 `diagnose-auth` 定位认证/网关问题；不要直接判定为账号密码错误。
 - ZeroTrust 扫码登录与浏览器兜底约束见 `remote-publish.md`。
-- `publish-md` 自动识别 ````mermaid` 围栏代码块，默认渲染 PNG 后调用附件接口上传，并写入 Confluence 内联附件图片；可显式指定 SVG。
+- `publish-md` 自动识别 ````mermaid` 围栏代码块，统一渲染 PNG 后调用附件接口上传，并写入 Confluence 内联附件图片。
 - 模板中的 HTML 注释行（`<!-- 非必填：... -->`）为填写指引，发布与粘贴转换时自动剔除，不进入 wiki 正文；代码围栏内的注释不受影响。
 
 默认配置：
@@ -92,23 +92,25 @@ python .\scripts\tianyin_wiki.py publish-md --dry-run --input .\outputs\detail-d
 - `--username`
 - `--password`
 - `--token`
-- `--mermaid-format svg|png`，默认 `png`
-- `--mermaid-scale <正数>`，默认 `3`，仅对 PNG 生效。
+
+- `--mermaid-scale <有限正数>`，默认 `3`，用于 PNG 渲染。
 - `--image-width <px>`，默认自适应：展示宽度 = 原始宽度的一半，减半后仍超过 `500` 则固定为 `500`（`min(原始宽度/2, 500)`）；传固定值则按该宽度展示（写入 `<ac:image ac:width="500">`），传 `0` 不设置显式宽度。
 
 处理顺序：
 
-1. 渲染每个 `mermaid` 代码块到临时目录。
-2. 通过 `POST /rest/api/content/{pageId}/child/attachment` 上传 SVG/PNG。
+1. 渲染每个 `mermaid` 代码块（统一渲染为**白底** PNG；默认按源码摘要、格式、PNG 缩放值和背景色缓存到 `~/.cache/tianyin-wiki/mermaid/`，可用环境变量 `TIANYIN_WIKI_CACHE_DIR` 覆盖；参数与源码未变时直接复用缓存图片，不重复调用渲染器）。
+2. 拉取页面已有附件清单，同名附件（文件名包含图表源码摘要、格式、PNG 缩放值和背景色）自动跳过上传；若并发发布导致同名上传冲突，重新拉取清单并复用已创建附件。
 3. 使用 `<ac:image><ri:attachment ... /></ac:image>` 写入 storage HTML。
-4. 更新页面正文。渲染临时文件会删除，远程附件不会自动删除。
+4. 更新页面正文；若正文、标题均无变化，跳过页面更新并输出 `noChanges`（不递增版本）。页面 PUT 遇到并发版本冲突时会重读页面并重试一次。渲染临时文件会删除，远程附件不会自动删除（改图后旧附件文件保留在页面附件列表中，正文不再引用）。
 
 代码块默认使用 Emacs 主题（`<ac:parameter ac:name="theme">Emacs</ac:parameter>`），无需显式配置。
 
-默认发布即高分辨率 PNG（`--mermaid-format png --mermaid-scale 3`），无需内联预览确认；显式选用 SVG 时以 `image/svg+xml` 上传（不经栅格化），首次发布应确认内联预览正常，若实例不支持则由用户显式改回 PNG：
+附件文件名规范化：`tianyin-mermaid-{摘要}-png-{缩放}-{背景}.png`（如 `tianyin-mermaid-ef44adf787cc2f26-png-3-white.png`），本地缓存键同构（省略 `tianyin-mermaid-` 前缀）；`摘要` 为图表源码 sha256 前 16 位，`缩放` 为 `--mermaid-scale` 值，`背景` 固定为白底。任一渲染参数变化即生成新文件名并上传，不会复用旧参数图片。
+
+Mermaid 图表统一发布为高分辨率**白底** PNG，默认缩放值为 `3`；可通过 `--mermaid-scale` 调整：
 
 ```powershell
-python .\scripts\tianyin_wiki.py publish-md --input .\outputs\detail-design.md --remote-url "http://wiki.timevale.cn:8081/pages/viewpage.action?pageId=123456" --mermaid-format png --mermaid-scale 3
+python .\scripts\tianyin_wiki.py publish-md --input .\outputs\detail-design.md --remote-url "http://wiki.timevale.cn:8081/pages/viewpage.action?pageId=123456" --mermaid-scale 3
 ```
 
 Mermaid 渲染按 `PATH` 探测 `mmdc`（`npm i -g @mermaid-js/mermaid-cli`）或 `npx`，无需配置。
@@ -118,23 +120,23 @@ Mermaid 渲染按 `PATH` 探测 `mmdc`（`npm i -g @mermaid-js/mermaid-cli`）�
 只上传一个附件，不更新页面正文。用于验证 Confluence 附件接口：
 
 ```powershell
-python .\scripts\tianyin_wiki.py upload-attachment --file .\outputs\tianyin-mermaid-example.svg --remote-url "http://wiki.timevale.cn:8081/pages/viewpage.action?pageId=123456"
+python .\scripts\tianyin_wiki.py upload-attachment --file .\outputs\tianyin-mermaid-example.png --remote-url "http://wiki.timevale.cn:8081/pages/viewpage.action?pageId=123456"
 ```
 
-上传使用 `POST /rest/api/content/{pageId}/child/attachment`、`multipart/form-data` 和 `X-Atlassian-Token: no-check`。同名附件由 Confluence 作为新版本处理。
+上传使用 `POST /rest/api/content/{pageId}/child/attachment`、`multipart/form-data` 和 `X-Atlassian-Token: no-check`。**同名附件会被 Confluence 拒绝（实测 HTTP 400，消息为 Cannot add a new attachment with same file name as an existing attachment），不会作为新版本处理**；`publish-md` 已按附件名去重，仅在上传新增图表时使用本接口。
 
 ### 辅助脚本
 
 本地渲染单个 Mermaid 文件：
 
 ```powershell
-python .\scripts\wiki_diagram.py --input .\outputs\flow.mmd --output .\outputs\flow.svg
+python .\scripts\wiki_diagram.py --input .\outputs\flow.mmd --output .\outputs\flow.png
 ```
 
-只读检查页面附件；可使用 `--filename` 过滤 SVG 附件：
+只读检查页面全部附件（自动跟随分页）；可使用 `--filename` 过滤指定附件，`--limit` 设置每页大小：
 
 ```powershell
-python .\scripts\wiki_attachment_probe.py --remote-url "<wiki-url>" --filename "tianyin-mermaid-example.svg"
+python .\scripts\wiki_attachment_probe.py --remote-url "<wiki-url>" --filename "tianyin-mermaid-example.png"
 ```
 
 ### `lint-doc`

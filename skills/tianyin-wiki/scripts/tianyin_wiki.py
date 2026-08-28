@@ -5,6 +5,7 @@ import base64
 import hashlib
 import html
 import json
+import math
 import mimetypes
 import os
 import re
@@ -63,6 +64,10 @@ ALLOWED_CLEAR_TARGETS = {
 
 # 远程 wiki API 调用统一超时，避免网络异常时 CLI 无限挂起
 HTTP_TIMEOUT = 60
+
+# Mermaid 渲染背景色（PNG 白底，避免透明图在深色/打印场景显示异常）；
+# 背景色同时参与渲染缓存键，变更后会生成新的缓存条目，不会复用旧背景的渲染结果
+MERMAID_BACKGROUND = "white"
 
 
 @dataclass
@@ -235,6 +240,20 @@ def normalize_newlines(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def normalize_storage_for_compare(value: str) -> str:
+    """Normalize Confluence storage serialization for equivalence comparison.
+
+    Confluence 返回的 storage 与提交的 HTML 存在两类序列化差异：非 ASCII
+    标点以命名实体返回（如 “ -> &ldquo;），结构化宏被注入服务端生成的
+    ac:macro-id / ac:schema-version 属性。解实体并剥离注入属性后，比较结果
+    只反映可见内容是否变化（实测见 docs/bugfix/bugfix_0828_*）。
+    """
+    value = html.unescape(value)
+    value = re.sub(r'\s*ac:macro-id=["\'][^"\']*["\']', "", value)
+    value = re.sub(r'\s*ac:schema-version=["\'][^"\']*["\']', "", value)
+    return value
+
+
 def strip_html_comments(markdown_text: str) -> str:
     """Remove full-line HTML comments (template fill guidance) outside code fences."""
     lines = normalize_newlines(markdown_text).split("\n")
@@ -359,6 +378,17 @@ def http_error_message(exc: urllib.error.HTTPError) -> str:
     return detail
 
 
+def is_duplicate_attachment_error(error: Exception) -> bool:
+    """Whether Confluence rejected an attachment because another publisher added the same name."""
+    detail = str(error).lower()
+    return "http 400" in detail and "same file name" in detail
+
+
+def is_page_version_conflict(error: Exception) -> bool:
+    """Whether a page PUT lost a concurrent version update."""
+    return "http 409" in str(error).lower()
+
+
 def request_json(method: str, url: str, headers: dict[str, str], body: dict | None = None) -> dict:
     data = None
     request_headers = dict(headers)
@@ -376,9 +406,7 @@ def request_json(method: str, url: str, headers: dict[str, str], body: dict | No
 def request_multipart_file(url: str, headers: dict[str, str], file_path: Path) -> dict:
     boundary = f"----TianyinWiki{uuid.uuid4().hex}"
     filename = file_path.name.replace("\\", "\\\\").replace('"', '\\"')
-    content_type = "image/svg+xml" if file_path.suffix.lower() == ".svg" else (
-        mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-    )
+    content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
     body = b"".join((
         f"--{boundary}\r\n".encode("ascii"),
         (
@@ -485,6 +513,33 @@ def upload_attachment(config: RuntimeConfig, file_path: Path) -> dict:
     return attachment
 
 
+def fetch_attachment_titles(config: RuntimeConfig) -> set[str]:
+    """Titles (filenames) of attachments already on the page, paginated.
+
+    `publish-md` 以此判断同名附件是否已存在：附件文件名包含图表源码的
+    sha256 摘要、PNG 缩放值与背景色，同名即同渲染参数，直接跳过上传即可（Confluence 对同名
+    附件的新建请求返回 HTTP 400，见实测记录）。
+    """
+    base = f"{config.base_url.rstrip('/')}/rest/api/content/{config.page_id}/child/attachment"
+    titles: set[str] = set()
+    url: str | None = f"{base}?limit=200"
+    while url:
+        response = request_json("GET", url, config.headers)
+        results = response.get("results")
+        if not isinstance(results, list):
+            raise RuntimeError("attachment list returned an invalid response")
+        titles.update(
+            str(attachment["title"])
+            for attachment in results
+            if isinstance(attachment, dict) and attachment.get("title")
+        )
+        next_link = (response.get("_links") or {}).get("next")
+        if not next_link:
+            break
+        url = next_link if next_link.startswith("http") else f"{config.base_url.rstrip('/')}{next_link}"
+    return titles
+
+
 def mermaid_blocks(markdown_text: str) -> list[str]:
     lines = normalize_newlines(markdown_text).split("\n")
     blocks: list[str] = []
@@ -523,48 +578,23 @@ def png_dimensions(png_path: Path) -> tuple[int, int]:
     return struct.unpack(">II", data[16:24])
 
 
-def svg_width(svg_path: Path) -> int:
-    """Extract the intrinsic width (px) from an SVG file.
 
-    Returns 0 when the width cannot be resolved (caller then skips auto-sizing).
-    """
-    head = svg_path.read_text(encoding="utf-8", errors="replace")[:8192]
-    match = re.search(r"<svg[^>]*\bwidth=\"(\d+(?:\.\d+)?)\"", head)
-    if match:
-        return max(1, int(float(match.group(1))))
-    match = re.search(r"<svg[^>]*\bviewBox=\"\s*-?\d+\s+-?\d+\s+(\d+(?:\.\d+)?)", head)
-    if match:
-        return max(1, int(float(match.group(1))))
-    return 0
-
-
-def diagram_image_width(image_path: Path) -> int | None:
-    """Auto display width: half the intrinsic width, capped at 500px.
-
-    Returns None when the intrinsic width cannot be determined (no explicit width).
-    """
-    if image_path.suffix.lower() == ".png":
-        original_width = png_dimensions(image_path)[0]
-    elif image_path.suffix.lower() == ".svg":
-        original_width = svg_width(image_path)
-    else:
-        original_width = 0
-    if original_width <= 0:
-        return None
-    return min(original_width // 2, 500)
+def diagram_image_width(image_path: Path) -> int:
+    """Auto display width: half the intrinsic width, capped at 500px."""
+    return min(png_dimensions(image_path)[0] // 2, 500)
 
 
 def render_mermaid_diagrams(
     markdown_text: str,
-    image_format: str,
     output_dir: Path,
     raster_scale: float = 3.0,
+    cache_dir: Path | None = None,
 ) -> list[RenderedMermaid]:
     sources = mermaid_blocks(markdown_text)
     if not sources:
         return []
-    if raster_scale <= 0:
-        raise ValueError("mermaid raster scale must be greater than zero")
+    if not math.isfinite(raster_scale) or raster_scale <= 0:
+        raise ValueError("mermaid raster scale must be a finite number greater than zero")
 
     command = resolve_mermaid_command()
     env = dict(os.environ)
@@ -582,36 +612,55 @@ def render_mermaid_diagrams(
             continue
 
         source_path = output_dir / f"mermaid-{index}.mmd"
-        image_path = output_dir / f"tianyin-mermaid-{digest}.{image_format}"
-        renderer_output = image_path
+        # 附件名/缓存键规范化：固定顺序 摘要-格式-缩放-背景色，全部渲染参数入名，
+        # 任一参数变化即生成新文件名并上传，避免复用不同渲染参数的旧图
+        scale_key = f"{raster_scale:g}"
+        render_suffix = f"png-{scale_key}-{MERMAID_BACKGROUND}"
+        image_path = output_dir / f"tianyin-mermaid-{digest}-{render_suffix}.png"
         write_text(source_path, source + "\n")
-        render_command = [
-            *command,
-            "-i",
-            str(source_path),
-            "-o",
-            str(renderer_output),
-            "-b",
-            "transparent",
-        ]
-        if image_format == "png":
-            render_command.extend(("--scale", f"{raster_scale:g}"))
-        result = subprocess.run(
-            render_command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
-            timeout=90,
-        )
-        if result.returncode != 0 or not renderer_output.is_file() or renderer_output.stat().st_size == 0:
-            detail = (result.stderr or result.stdout).strip()
-            raise RuntimeError(f"failed to render mermaid diagram {index}: {detail[:1000] or 'renderer produced no image'}")
-        if image_format == "svg":
-            svg_prefix = renderer_output.read_text(encoding="utf-8", errors="replace")[:4096]
-            if not re.search(r"<svg\b", svg_prefix, flags=re.IGNORECASE):
-                raise RuntimeError(f"Mermaid renderer did not produce a valid SVG for diagram {index}")
+
+        # 附件名与缓存键同构（缓存键省略 tianyin-mermaid- 前缀）：
+        # 同参可复用缓存与远端附件；缓存文件异常时删除并按未命中重新渲染
+        cache_key = f"{digest}-{render_suffix}"
+        cached_path = cache_dir / f"{cache_key}.png" if cache_dir else None
+        cache_hit = cached_path is not None and cached_path.is_file() and cached_path.stat().st_size > 0
+        if cache_hit:
+            try:
+                png_dimensions(cached_path)
+            except RuntimeError:
+                cached_path.unlink(missing_ok=True)
+                cache_hit = False
+        if cache_hit:
+            shutil.copyfile(cached_path, image_path)
+        else:
+            render_command = [
+                *command,
+                "-i",
+                str(source_path),
+                "-o",
+                str(image_path),
+                "-b",
+                MERMAID_BACKGROUND,
+            ]
+            render_command.extend(("--scale", scale_key))
+            result = subprocess.run(
+                render_command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                timeout=90,
+            )
+            if result.returncode != 0 or not image_path.is_file() or image_path.stat().st_size == 0:
+                detail = (result.stderr or result.stdout).strip()
+                raise RuntimeError(f"failed to render mermaid diagram {index}: {detail[:1000] or 'renderer produced no image'}")
+            png_dimensions(image_path)
+            if cached_path is not None:
+                cached_path.parent.mkdir(parents=True, exist_ok=True)
+                temp_cache = cached_path.with_suffix(cached_path.suffix + ".tmp")
+                shutil.copyfile(image_path, temp_cache)
+                os.replace(temp_cache, cached_path)
 
         diagram = RenderedMermaid(attachment_filename=image_path.name, image_path=image_path)
         rendered_by_digest[digest] = diagram
@@ -1016,16 +1065,21 @@ def cmd_publish_md(args: argparse.Namespace) -> int:
     try:
         config = load_runtime_config(args)
         page = fetch_page(config)
-        # 页面标题：--title > 文档主标题（正文第一个一级标题，去掉 # 前缀）> 页面现有标题
+        # 页面标题：--title > 文档主标题（正文第一个一级标题，去掉 # 前缀）> 页面现有标题。
+        # 发布过程可能因并发重读页面；未显式指定标题时始终保留最新页面标题。
         main_title = extract_main_title(markdown_text)
-        title = args.title or (main_title[2:].strip() if main_title else "") or page["title"]
+        requested_title = args.title or (main_title[2:].strip() if main_title else "")
+        title = requested_title or page["title"]
         next_version = int(page["version"]["number"]) + 1
+        cache_dir = Path(
+            os.environ.get("TIANYIN_WIKI_CACHE_DIR", Path.home() / ".cache" / "tianyin-wiki" / "mermaid")
+        )
         with tempfile.TemporaryDirectory(prefix="tianyin-mermaid-") as temp_dir:
             diagrams = render_mermaid_diagrams(
                 markdown_text,
-                args.mermaid_format,
                 Path(temp_dir),
                 args.mermaid_scale,
+                cache_dir,
             )
             if args.image_width is None:
                 image_widths: list[int | None] = [diagram_image_width(diagram.image_path) for diagram in diagrams]
@@ -1054,22 +1108,64 @@ def cmd_publish_md(args: argparse.Namespace) -> int:
                     "storageLength": len(storage_html),
                 }, ensure_ascii=False))
                 return 0
+            # 页面已有同名附件（文件名包含源码摘要与 PNG 缩放值）自动跳过上传，仅传新增图。
+            existing_attachment_titles: set[str] = set()
+            if diagrams:
+                existing_attachment_titles = fetch_attachment_titles(config)
             uploaded_filenames: set[str] = set()
             for diagram in diagrams:
-                if diagram.attachment_filename not in uploaded_filenames:
+                filename = diagram.attachment_filename
+                if filename in existing_attachment_titles or filename in uploaded_filenames:
+                    continue
+                try:
                     upload_attachment(config, diagram.image_path)
-                    uploaded_filenames.add(diagram.attachment_filename)
-            endpoint = f"{config.base_url.rstrip('/')}/rest/api/content/{config.page_id}"
-            payload = {
-                "id": page["id"],
-                "type": page["type"],
-                "title": title,
-                "version": {"number": next_version},
-                "body": {"storage": {"value": storage_html, "representation": "storage"}},
-            }
-            if page.get("space", {}).get("key"):
-                payload["space"] = {"key": page["space"]["key"]}
-            response = request_json("PUT", endpoint, config.headers, payload)
+                except RuntimeError as exc:
+                    if not is_duplicate_attachment_error(exc):
+                        raise
+                    refreshed_titles = fetch_attachment_titles(config)
+                    if filename not in refreshed_titles:
+                        raise
+                    existing_attachment_titles.update(refreshed_titles)
+                    continue
+                uploaded_filenames.add(filename)
+
+            # 并发发布时页面版本可能已变化：重读页面并在 409 时最多重试一次。
+            # 若其他发布者已写入相同正文，直接返回 noChanges，不再空更新版本。
+            for attempt in range(2):
+                page = fetch_page(config)
+                title = requested_title or page["title"]
+                next_version = int(page["version"]["number"]) + 1
+                current_storage = (page.get("body", {}).get("storage") or {}).get("value") or ""
+                if (
+                    title == page.get("title")
+                    and normalize_storage_for_compare(storage_html) == normalize_storage_for_compare(current_storage)
+                ):
+                    print(json.dumps({
+                        "noChanges": True,
+                        "id": page["id"],
+                        "title": title,
+                        "version": page["version"]["number"],
+                        "template": template,
+                        "mermaidAttachments": len({d.attachment_filename for d in diagrams}),
+                        "uploadedAttachments": len(uploaded_filenames),
+                    }, ensure_ascii=False))
+                    return 0
+                endpoint = f"{config.base_url.rstrip('/')}/rest/api/content/{config.page_id}"
+                payload = {
+                    "id": page["id"],
+                    "type": page["type"],
+                    "title": title,
+                    "version": {"number": next_version},
+                    "body": {"storage": {"value": storage_html, "representation": "storage"}},
+                }
+                if page.get("space", {}).get("key"):
+                    payload["space"] = {"key": page["space"]["key"]}
+                try:
+                    response = request_json("PUT", endpoint, config.headers, payload)
+                    break
+                except RuntimeError as exc:
+                    if attempt == 1 or not is_page_version_conflict(exc):
+                        raise
     except Exception as exc:
         return error(str(exc))
 
@@ -1078,7 +1174,8 @@ def cmd_publish_md(args: argparse.Namespace) -> int:
         "title": response["title"],
         "version": response["version"]["number"],
         "template": template,
-        "mermaidAttachments": len(uploaded_filenames),
+        "mermaidAttachments": len({d.attachment_filename for d in diagrams}),
+        "uploadedAttachments": len(uploaded_filenames),
     }, ensure_ascii=False))
     return 0
 
@@ -1164,7 +1261,7 @@ def build_parser() -> argparse.ArgumentParser:
     publish_parser.add_argument("--username")
     publish_parser.add_argument("--password")
     publish_parser.add_argument("--token")
-    publish_parser.add_argument("--mermaid-format", choices=("svg", "png"), default="png")
+
     publish_parser.add_argument("--mermaid-scale", type=float, default=3.0)
     publish_parser.add_argument(
         "--image-width",

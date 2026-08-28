@@ -2,17 +2,17 @@
 
 ## REST 发布
 
-发布前建议执行 `lint-doc` 自查，再使用 `publish-md`（结构校验差异仅提示，不阻断发布）。Mermaid 默认作为高分辨率 PNG 附件上传（`--mermaid-format png --mermaid-scale 3`）；SVG 是显式回退格式。
+发布前建议执行 `lint-doc` 自查，再使用 `publish-md`（结构校验差异仅提示，不阻断发布）。Mermaid 统一作为高分辨率 PNG 附件上传，默认缩放值为 `3`。
 
 ```powershell
 python .\scripts\tianyin_wiki.py lint-doc --input .\outputs\detail-design.md
 python .\scripts\tianyin_wiki.py publish-md --input .\outputs\detail-design.md --remote-url "<wiki-url>"
 ```
 
-默认发布即 PNG，无需内联预览确认。仅当显式选用 SVG 时，首次向某个 Confluence 实例发布后确认页面内联预览正常；若实例不支持 SVG，等待用户明确指示后使用：
+需要调整图片清晰度时，显式指定 PNG 缩放值：
 
 ```powershell
-python .\scripts\tianyin_wiki.py publish-md --input .\outputs\detail-design.md --remote-url "<wiki-url>" --mermaid-format png --mermaid-scale 3
+python .\scripts\tianyin_wiki.py publish-md --input .\outputs\detail-design.md --remote-url "<wiki-url>" --mermaid-scale 3
 ```
 
 ## 认证诊断
