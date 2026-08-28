@@ -1,0 +1,22 @@
+docs/bugfix/bugfix_0828_wiki页面标题与文档主标题不一致.md
+  h_c93c98e603be80 1-67
+skills/tianyin-wiki/SKILL.md
+  h_c93c98e603be80 33
+skills/tianyin-wiki/references/cli-reference.md
+  h_c93c98e603be80 87-88,150-151
+skills/tianyin-wiki/references/templates/tianyin-baseline-design-template.md
+  h_c93c98e603be80 3,21,29,37,41,47,53,57,59,75,81,87,91,93,121,123,129,137,143,159,163,167,171,175,179,183,187,195,199,205
+skills/tianyin-wiki/scripts/tianyin_wiki.py
+  h_c93c98e603be80 52-61,158,255-268,640-643,662,666,668-672,886-889,1019-1021,1049,1066
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "832fc826e77d87c6cf7476c2222497270fadf340",
+  "prompts": {},
+  "humans": {
+    "h_c93c98e603be80": {
+      "author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
