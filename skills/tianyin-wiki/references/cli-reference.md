@@ -7,20 +7,19 @@
 - 未显式提供 `remote-url` 时，只允许本地模板初始化或本地文档更新；只有显式提供时才允许访问或更新远程 wiki。
 - 修改本地 Markdown 时，如果用户没有显式指定 `remote-url`，严禁同时更新远程 wiki。
 - 远程发布前建议先执行 `lint-doc` 自查；发布时模板结构校验差异（缺项/多项）仅提示，不阻断推送。
-- REST 发布失败时先执行 `diagnose-auth` 定位认证/网关问题；不要直接判定为账号密码错误。
-- ZeroTrust 扫码登录与浏览器兜底约束见 `remote-publish.md`。
+- 远程发布前可用 `check-page` 做只读验证；认证缺失会直接提示补充账号密码。
+- 首次使用或配置缺少 `username`/`password` 时，必须先补充账号密码配置、命令行参数或环境变量。
 - `publish-md` 自动识别 ````mermaid` 围栏代码块，统一渲染 PNG 后调用附件接口上传，并写入 Confluence 内联附件图片。
 - 模板中的 HTML 注释行（`<!-- 非必填：... -->`）为填写指引，发布与粘贴转换时自动剔除，不进入 wiki 正文；代码围栏内的注释不受影响。
 
 默认配置：
 
 - CLI 默认读取用户配置目录 `%USERPROFILE%\.config\tianyin-wiki\config.json`（macOS/Linux 为 `~/.config/tianyin-wiki/config.json`）；该文件为本地个人配置（含凭据），**不随 skill 分发、不提交版本库**，分发物只含 `tianyin-wiki.config.sample.json`。
-- 旧版本曾把个人配置放在 `%USERPROFILE%\.tianyin-wiki\config.json` 或 `scripts\tianyin-wiki.config.json`（skill 目录内）；发现这些历史文件时会读取并提示迁移到用户配置目录，请迁移后删除。
 - 可用环境变量 `CONFLUENCE_CONFIG=<path>` 指向自己的配置文件（支持 `~` 展开），优先于默认路径。
-- 配置字段支持：`template`、`remoteUrl`、`baseUrl`、`pageId`、`authType`、`username`、`password`、`token`。
+- 配置字段支持：`template`、`remoteUrl`、`baseUrl`、`pageId`、`username`、`password`。
 - `template` 为默认模板模式，**仅允许存储 `baseline` 或 `1-n`**；`raw` 是内置默认（不校验格式直推），不允许写入配置，写入 `raw`/`direct` 会报错。未传 `--template` 时所有命令默认读取该字段。
 - 参数优先级：命令行显式参数 > 配置文件 > 环境变量；`--template` 未显式指定时取配置 `template` 字段，再缺省 `raw`（`init-template` 需显式指定 `baseline`/`1-n`；`merge-clear` 固定 `baseline`）。
-- 凭据也可经环境变量注入：`CONFLUENCE_USERNAME`、`CONFLUENCE_PASSWORD`、`CONFLUENCE_TOKEN`、`CONFLUENCE_AUTH_TYPE`。
+- 凭据也可经环境变量注入：`CONFLUENCE_USERNAME`、`CONFLUENCE_PASSWORD`。
 - 配置文件中已提供 `baseUrl` 和 `pageId` 时，`check-page`、`publish-md` 可省略 `--remote-url`。
 - 不要在终端、对话或文档中回显认证值。
 
@@ -88,10 +87,8 @@ python .\scripts\tianyin_wiki.py publish-md --dry-run --input .\outputs\detail-d
 
 支持认证参数：
 
-- `--auth-type basic|bearer|none`
 - `--username`
 - `--password`
-- `--token`
 
 - `--mermaid-scale <有限正数>`，默认 `3`，用于 PNG 渲染。
 - `--image-width <px>`，默认自适应：展示宽度 = 原始宽度的一半，减半后仍超过 `500` 则固定为 `500`（`min(原始宽度/2, 500)`）；传固定值则按该宽度展示（写入 `<ac:image ac:width="500">`），传 `0` 不设置显式宽度。
@@ -169,30 +166,27 @@ python .\scripts\tianyin_wiki.py prepare-paste-html --input .\outputs\detail-des
 python .\scripts\tianyin_wiki.py prepare-paste-html --input .\outputs\detail-design.md --output .\outputs\detail-design.paste.html
 ```
 
-### `diagnose-auth`
+### `doctor`
 
-诊断 wiki 认证和网关行为：
-
-```powershell
-python .\scripts\tianyin_wiki.py diagnose-auth
-```
-
-诊断结果判断：
-
-- `no-auth` 返回 `302` 且 `Location` 指向 `zerotrust.esign.cn`：CLI 无浏览器零信任登录态。
-- `configured-auth` 返回 `500` 且 `server=openresty`：当前认证请求被网关异常处理。
-- `dummy-basic` 也返回 `500`：任意 Basic Authorization 都会触发网关 500，不是账号密码错误。
-- `dummy-bearer` 返回 `302`：问题特指 Basic 认证头，不是所有 Authorization 头都会 500。
-
-### `get-login-url`
-
-当无认证访问被 ZeroTrust 重定向时，输出供浏览器打开的登录链接：
+只做本机环境诊断，不读取远程 Wiki、不读取凭据：
 
 ```powershell
-python .\scripts\tianyin_wiki.py get-login-url --remote-url "http://wiki.timevale.cn:8081/pages/viewpage.action?pageId=123456"
+python .\scripts\tianyin_wiki.py doctor --input .\outputs\detail-design.md
 ```
 
-仅在 `302`、`303`、`307` 或 `308` 响应包含 `Location` 时成功。输出链接只用于把用户带到公司登录页，不是可导出的认证凭证。使用 `@电脑` 时，让用户完成扫码、MFA 和 CAPTCHA；禁止读取或导出 Cookie、LocalStorage、会话文件、Authorization 头、密码或 token。
+Windows 可优先使用启动器，它会先选择可用 Python 3.9+；未发现时直接要求安装：
+
+```powershell
+.\scripts\tianyin_wiki.ps1 doctor --input .\outputs\detail-design.md
+```
+
+输出当前 Python 路径、Mermaid 渲染器来源、是否通过 `npx` 回退、自动探测到的 Chrome/Edge 路径，以及可选输入文档中的 Mermaid 图块数量。新机器首次发布较慢时，先用它确认是否缺少浏览器路径或正在走 `npx` 冷启动；频繁发布建议安装全局 `mmdc`。
+
+运行时探测结果会缓存到 `~/.cache/tianyin-wiki/runtime.json`，后续 `publish-md` 优先复用缓存，减少环境探测耗时。安装新工具或调整浏览器路径后，用下面的命令刷新缓存：
+
+```powershell
+python .\scripts\tianyin_wiki.py doctor --refresh-runtime --input .\outputs\detail-design.md
+```
 
 ### `merge-clear`
 
@@ -218,7 +212,3 @@ python .\scripts\tianyin_wiki.py check-page --remote-url "http://wiki.timevale.c
 ```powershell
 python .\scripts\tianyin_wiki.py check-page
 ```
-
-## 浏览器兜底
-
-浏览器登录、扫码和保存约束见 `remote-publish.md`。浏览器兜底不上传 Mermaid 附件；需要内联图时使用 REST `publish-md`。

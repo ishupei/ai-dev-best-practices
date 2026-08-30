@@ -12,10 +12,8 @@ def main() -> int:
     parser.add_argument("--remote-url")
     parser.add_argument("--filename")
     parser.add_argument("--limit", type=int, default=200, help="attachment API page size (default 200)")
-    parser.add_argument("--auth-type", choices=("basic", "bearer", "none"))
     parser.add_argument("--username")
     parser.add_argument("--password")
-    parser.add_argument("--token")
     args = parser.parse_args()
 
     filename = (args.filename or "").strip()

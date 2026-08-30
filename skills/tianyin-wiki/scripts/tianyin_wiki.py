@@ -27,12 +27,9 @@ from typing import Callable
 ROOT = Path(__file__).resolve().parent.parent
 # 个人配置文件统一存于用户配置目录（~/.config/tianyin-wiki），不随 skill 分发、不入版本库
 DEFAULT_CONFIG_FILE = Path.home() / ".config" / "tianyin-wiki" / "config.json"
-# 旧版本曾把个人配置放在用户目录 ~/.tianyin-wiki 或 skill 目录 scripts/ 下；保留兼容读取，仅用于提示迁移
-LEGACY_CONFIG_FILES = (
-    Path.home() / ".tianyin-wiki" / "config.json",
-    ROOT / "scripts" / "tianyin-wiki.config.json",
-)
-
+# 本机运行时探测缓存只保存工具路径，不保存 Wiki 地址或凭据
+DEFAULT_RUNTIME_CACHE_FILE = Path.home() / ".cache" / "tianyin-wiki" / "runtime.json"
+RUNTIME_CACHE_VERSION = 1
 TEMPLATE_FILES = {
     "baseline": "tianyin-baseline-design-template.md",
     "1-n": "tianyin-1-n-design-template.md",
@@ -114,10 +111,12 @@ def resolve_template(args: argparse.Namespace, fallback: str = "raw") -> str:
     Config `template` stores template-generation preferences only (baseline/1-n);
     raw is the built-in default and must not be stored in the config file.
     """
-    config_data = load_config_file()
     explicit = getattr(args, "template", None)
     if explicit:
         return normalize_template_name(str(explicit).strip())
+    if fallback == "raw" and not config_file_exists():
+        return "raw"
+    config_data = load_config_file()
     configured = str(config_data.get("template") or "").strip()
     if configured:
         normalized = normalize_template_name(configured)
@@ -132,10 +131,6 @@ def get_template_file(template_name: str) -> Path:
     candidate = TEMPLATE_DIR / filename
     if candidate.is_file():
         return candidate
-    # 兼容旧版：模板曾放在 skill 根目录
-    legacy = ROOT / filename
-    if legacy.is_file():
-        return legacy
     raise FileNotFoundError(f"template file not found: {candidate}")
 
 
@@ -295,44 +290,92 @@ def parse_remote_url(remote_url: str) -> tuple[str, str]:
     return f"{parsed.scheme}://{parsed.netloc}", page_id
 
 
-def build_headers(auth_type: str, username: str | None, password: str | None, token: str | None) -> dict[str, str]:
-    headers = {"Accept": "application/json"}
-    if auth_type == "basic":
-        if not username or not password:
-            raise ValueError("basic auth requires username and password")
-        encoded = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
-        headers["Authorization"] = f"Basic {encoded}"
-    elif auth_type == "bearer":
-        if not token:
-            raise ValueError("bearer auth requires token")
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
+def build_headers(username: str | None, password: str | None) -> dict[str, str]:
+    if not username or not password:
+        raise ValueError(
+            "Wiki username/password are required. Add `username` and `password` to "
+            f"{DEFAULT_CONFIG_FILE}, pass --username/--password, or set "
+            "CONFLUENCE_USERNAME/CONFLUENCE_PASSWORD before running remote wiki operations."
+        )
+    encoded = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+    return {"Accept": "application/json", "Authorization": f"Basic {encoded}"}
 
 
 @lru_cache(maxsize=1)
 def load_config_file() -> dict:
     """Load the personal config file once per process (cached)."""
-    config_path = os.environ.get("CONFLUENCE_CONFIG")
-    if config_path:
-        config_file = Path(config_path).expanduser().resolve()
-    else:
-        config_file = DEFAULT_CONFIG_FILE
+    config_file = resolve_config_file()
     if not config_file.exists():
-        # 兼容旧版：读取历史位置的个人配置并提示迁移到用户配置目录
-        legacy_file = next((p for p in LEGACY_CONFIG_FILES if p.exists()), None)
-        if legacy_file is not None:
-            print(
-                f"WARNING: {legacy_file} is deprecated; move it to {DEFAULT_CONFIG_FILE}",
-                file=sys.stderr,
-            )
-            config_file = legacy_file
-        else:
-            return {}
+        return {}
     with config_file.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
     if not isinstance(data, dict):
         raise ValueError(f"config file must be a JSON object: {config_file}")
     return data
+
+
+def resolve_config_file() -> Path:
+    config_path = os.environ.get("CONFLUENCE_CONFIG")
+    if config_path:
+        return Path(config_path).expanduser().resolve()
+    return DEFAULT_CONFIG_FILE
+
+
+def config_file_exists() -> bool:
+    return resolve_config_file().exists()
+
+
+def runtime_cache_file(env: dict[str, str] | None = None) -> Path:
+    env = env or os.environ
+    configured = str(env.get("TIANYIN_WIKI_RUNTIME_CACHE") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return DEFAULT_RUNTIME_CACHE_FILE
+
+
+def load_runtime_cache(env: dict[str, str] | None = None) -> dict:
+    env = env or os.environ
+    if env.get("TIANYIN_WIKI_DISABLE_RUNTIME_CACHE") == "1":
+        return {}
+    cache_file = runtime_cache_file(env)
+    if not cache_file.is_file():
+        return {}
+    try:
+        with cache_file.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict) or data.get("version") != RUNTIME_CACHE_VERSION:
+        return {}
+    return data
+
+
+def save_runtime_cache(update: dict, env: dict[str, str] | None = None) -> None:
+    env = env or os.environ
+    if env.get("TIANYIN_WIKI_DISABLE_RUNTIME_CACHE") == "1":
+        return
+    cache_file = runtime_cache_file(env)
+    data = load_runtime_cache(env)
+    data.update(update)
+    data["version"] = RUNTIME_CACHE_VERSION
+    data["platform"] = sys.platform
+    try:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        temp_file = cache_file.with_suffix(cache_file.suffix + ".tmp")
+        with temp_file.open("w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+        os.replace(temp_file, cache_file)
+    except OSError:
+        return
+
+
+def command_path_available(command: list[str]) -> bool:
+    if not command:
+        return False
+    executable = str(command[0])
+    if Path(executable).is_file():
+        return True
+    return shutil.which(executable) is not None
 
 
 def config_remote_url(config_data: dict) -> str | None:
@@ -347,8 +390,9 @@ def config_remote_url(config_data: dict) -> str | None:
 
 
 def load_remote_target(args: argparse.Namespace) -> tuple[str, str, str]:
-    config_data = load_config_file()
-    remote_url = args.remote_url or config_remote_url(config_data)
+    remote_url = args.remote_url
+    if not remote_url:
+        remote_url = config_remote_url(load_config_file())
     if not remote_url:
         raise ValueError("remote-url required; remote wiki operations must be explicitly requested")
     base_url, page_id = parse_remote_url(remote_url)
@@ -357,12 +401,18 @@ def load_remote_target(args: argparse.Namespace) -> tuple[str, str, str]:
 
 def load_runtime_config(args: argparse.Namespace) -> RuntimeConfig:
     remote_url, base_url, page_id = load_remote_target(args)
+    username = getattr(args, "username", None)
+    password = getattr(args, "password", None)
+    if username and password:
+        headers = build_headers(username, password)
+        return RuntimeConfig(remote_url=remote_url, base_url=base_url, page_id=page_id, headers=headers)
+
     config_data = load_config_file()
-    auth_type = args.auth_type or config_data.get("authType") or config_data.get("auth_type") or os.environ.get("CONFLUENCE_AUTH_TYPE") or "basic"
-    username = args.username or config_data.get("username") or os.environ.get("CONFLUENCE_USERNAME")
-    password = args.password or config_data.get("password") or os.environ.get("CONFLUENCE_PASSWORD")
-    token = args.token or config_data.get("token") or os.environ.get("CONFLUENCE_TOKEN")
-    headers = build_headers(auth_type, username, password, token)
+    if not username:
+        username = config_data.get("username") or os.environ.get("CONFLUENCE_USERNAME")
+    if not password:
+        password = config_data.get("password") or os.environ.get("CONFLUENCE_PASSWORD")
+    headers = build_headers(username, password)
     return RuntimeConfig(remote_url=remote_url, base_url=base_url, page_id=page_id, headers=headers)
 
 
@@ -427,72 +477,49 @@ def request_multipart_file(url: str, headers: dict[str, str], file_path: Path) -
         raise RuntimeError(http_error_message(exc)) from exc
 
 
-class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-def probe_http(url: str, headers: dict[str, str]) -> dict:
-    opener = urllib.request.build_opener(NoRedirectHandler)
-    request = urllib.request.Request(url=url, headers=headers)
+def cmd_doctor(args: argparse.Namespace) -> int:
+    result: dict[str, object] = {
+        "python": sys.executable,
+        "platform": sys.platform,
+        "runtimeCache": str(runtime_cache_file()),
+        "refreshRuntime": bool(args.refresh_runtime),
+    }
     try:
-        with opener.open(request, timeout=15) as response:
-            return {
-                "status": response.status,
-                "server": response.headers.get("Server", ""),
-                "contentType": response.headers.get("Content-Type", ""),
-                "location": response.headers.get("Location", ""),
-            }
-    except urllib.error.HTTPError as exc:
-        return {
-            "status": exc.code,
-            "server": exc.headers.get("Server", ""),
-            "contentType": exc.headers.get("Content-Type", ""),
-            "location": exc.headers.get("Location", ""),
+        command = resolve_mermaid_command(refresh_cache=args.refresh_runtime)
+        result["mermaidRenderer"] = {
+            "available": True,
+            "command": command,
+            "viaNpx": Path(command[0]).name.lower().startswith("npx"),
+        }
+    except RuntimeError as exc:
+        result["mermaidRenderer"] = {
+            "available": False,
+            "error": str(exc),
         }
 
+    env = mermaid_environment(refresh_cache=args.refresh_runtime)
+    browser = env.get("PUPPETEER_EXECUTABLE_PATH") or ""
+    result["browser"] = {
+        "executable": browser,
+        "detected": bool(browser),
+    }
+    result["puppeteer"] = {
+        "skipDownload": env.get("PUPPETEER_SKIP_DOWNLOAD", ""),
+    }
 
-def cmd_diagnose_auth(args: argparse.Namespace) -> int:
-    config = load_runtime_config(args)
-    urls = {
-        "view": config.remote_url,
-        "rest": f"{config.base_url.rstrip('/')}/rest/api/content/{config.page_id}?expand=version",
-    }
-    dummy_basic = "Basic " + base64.b64encode(b"x:y").decode("ascii")
-    header_sets = {
-        "no-auth": {"Accept": "application/json"},
-        "configured-auth": config.headers,
-        "dummy-basic": {"Accept": "application/json", "Authorization": dummy_basic},
-        "dummy-bearer": {"Accept": "application/json", "Authorization": "Bearer dummy"},
-    }
-    result = {
-        "remoteUrl": config.remote_url,
-        "pageId": config.page_id,
-        "checks": {
-            url_name: {
-                header_name: probe_http(url, headers)
-                for header_name, headers in header_sets.items()
-            }
-            for url_name, url in urls.items()
-        },
-    }
+    if args.input:
+        input_path = Path(args.input).resolve()
+        if not input_path.is_file():
+            return error(f"markdown file not found: {input_path}")
+        result["input"] = {
+            "path": str(input_path),
+            "mermaidBlocks": len(mermaid_blocks(read_text(input_path))),
+        }
+
+    hint = mermaid_runtime_hint(env)
+    if hint:
+        result["hint"] = hint
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0
-
-
-def cmd_get_login_url(args: argparse.Namespace) -> int:
-    remote_url, _, _ = load_remote_target(args)
-    result = probe_http(remote_url, {"Accept": "text/html"})
-    location = str(result.get("location") or "").strip()
-    if result.get("status") not in (301, 302, 303, 307, 308) or not location:
-        raise RuntimeError(
-            f"no browser login redirect found: HTTP {result.get('status')} "
-            f"(Location: {location or 'missing'})"
-        )
-    print(json.dumps({
-        "remoteUrl": remote_url,
-        "loginUrl": urllib.parse.urljoin(remote_url, location),
-    }, ensure_ascii=False))
     return 0
 
 
@@ -541,6 +568,8 @@ def fetch_attachment_titles(config: RuntimeConfig) -> set[str]:
 
 
 def mermaid_blocks(markdown_text: str) -> list[str]:
+    if "```mermaid" not in markdown_text.lower():
+        return []
     lines = normalize_newlines(markdown_text).split("\n")
     blocks: list[str] = []
     i = 0
@@ -561,14 +590,133 @@ def mermaid_blocks(markdown_text: str) -> list[str]:
     return blocks
 
 
-def resolve_mermaid_command() -> list[str]:
+def resolve_mermaid_command(
+    env: dict[str, str] | None = None,
+    refresh_cache: bool = False,
+) -> list[str]:
+    env = env or os.environ
+    if not refresh_cache:
+        cache = load_runtime_cache(env)
+        cached = cache.get("mermaidCommand")
+        if (
+            isinstance(cached, list)
+            and all(isinstance(part, str) for part in cached)
+            and command_path_available(cached)
+        ):
+            return cached
+        if cached == [] and cache.get("mermaidProbeComplete") is True:
+            raise RuntimeError("Mermaid renderer unavailable: install mmdc or npx, then run doctor --refresh-runtime")
     mmdc = shutil.which("mmdc") or shutil.which("mmdc.cmd")
     if mmdc:
-        return [mmdc]
+        command = [mmdc]
+        save_runtime_cache({"mermaidCommand": command, "mermaidProbeComplete": True}, env)
+        return command
     npx = shutil.which("npx") or shutil.which("npx.cmd")
     if npx:
-        return [npx, "--yes", "@mermaid-js/mermaid-cli"]
+        command = [npx, "--yes", "@mermaid-js/mermaid-cli"]
+        save_runtime_cache({"mermaidCommand": command, "mermaidProbeComplete": True}, env)
+        return command
+    save_runtime_cache({"mermaidCommand": [], "mermaidProbeComplete": True}, env)
     raise RuntimeError("Mermaid renderer unavailable: install mmdc or npx")
+
+
+def browser_executable_candidates(env: dict[str, str] | None = None) -> list[Path]:
+    """Common Chrome/Edge locations used by Puppeteer-based Mermaid rendering."""
+    env = env or os.environ
+    candidates: list[Path] = []
+    explicit = (
+        env.get("PUPPETEER_EXECUTABLE_PATH")
+        or env.get("CHROME_PATH")
+        or env.get("CHROMIUM_PATH")
+    )
+    if explicit:
+        candidates.append(Path(explicit))
+
+    if sys.platform == "win32":
+        for root_var in ("LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"):
+            root = env.get(root_var)
+            if not root:
+                continue
+            base = Path(root)
+            candidates.extend((
+                base / "Google" / "Chrome" / "Application" / "chrome.exe",
+                base / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+            ))
+    elif sys.platform == "darwin":
+        candidates.extend((
+            Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+            Path("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+        ))
+    else:
+        for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge", "microsoft-edge-stable"):
+            executable = shutil.which(name)
+            if executable:
+                candidates.append(Path(executable))
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate.expanduser())
+        if key not in seen:
+            seen.add(key)
+            deduped.append(candidate.expanduser())
+    return deduped
+
+
+def resolve_browser_executable(
+    env: dict[str, str] | None = None,
+    refresh_cache: bool = False,
+) -> Path | None:
+    env = env or os.environ
+    explicit = (
+        env.get("PUPPETEER_EXECUTABLE_PATH")
+        or env.get("CHROME_PATH")
+        or env.get("CHROMIUM_PATH")
+    )
+    if explicit:
+        path = Path(explicit).expanduser()
+        return path if path.is_file() else None
+    if not refresh_cache:
+        cache = load_runtime_cache(env)
+        cached = cache.get("browserExecutable")
+        if isinstance(cached, str) and cached:
+            path = Path(cached).expanduser()
+            if path.is_file():
+                return path
+        if cached == "" and cache.get("browserProbeComplete") is True:
+            return None
+    for candidate in browser_executable_candidates(env):
+        if candidate.is_file():
+            save_runtime_cache({"browserExecutable": str(candidate), "browserProbeComplete": True}, env)
+            return candidate
+    save_runtime_cache({"browserExecutable": "", "browserProbeComplete": True}, env)
+    return None
+
+
+def mermaid_environment(
+    base_env: dict[str, str] | None = None,
+    refresh_cache: bool = False,
+) -> dict[str, str]:
+    env = dict(base_env or os.environ)
+    env.setdefault("PUPPETEER_SKIP_DOWNLOAD", "true")
+    if not env.get("PUPPETEER_EXECUTABLE_PATH"):
+        browser = resolve_browser_executable(env, refresh_cache=refresh_cache)
+        if browser is not None:
+            env["PUPPETEER_EXECUTABLE_PATH"] = str(browser)
+    return env
+
+
+def mermaid_runtime_hint(env: dict[str, str]) -> str:
+    if env.get("PUPPETEER_EXECUTABLE_PATH"):
+        return ""
+    return (
+        "No local Chrome/Edge executable was auto-detected. Install Chrome/Edge or set "
+        "PUPPETEER_EXECUTABLE_PATH to the browser executable path; on Windows this often "
+        "looks like C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe. "
+        "For faster repeated runs, install Mermaid CLI globally with "
+        "`npm i -g @mermaid-js/mermaid-cli` so the CLI can use `mmdc` directly."
+    )
 
 
 def png_dimensions(png_path: Path) -> tuple[int, int]:
@@ -596,9 +744,8 @@ def render_mermaid_diagrams(
     if not math.isfinite(raster_scale) or raster_scale <= 0:
         raise ValueError("mermaid raster scale must be a finite number greater than zero")
 
-    command = resolve_mermaid_command()
-    env = dict(os.environ)
-    env.setdefault("PUPPETEER_SKIP_DOWNLOAD", "true")
+    env = mermaid_environment()
+    command = resolve_mermaid_command(env)
 
     rendered_by_digest: dict[str, RenderedMermaid] = {}
     rendered: list[RenderedMermaid] = []
@@ -654,6 +801,9 @@ def render_mermaid_diagrams(
             )
             if result.returncode != 0 or not image_path.is_file() or image_path.stat().st_size == 0:
                 detail = (result.stderr or result.stdout).strip()
+                hint = mermaid_runtime_hint(env)
+                if hint:
+                    detail = f"{detail}\n{hint}" if detail else hint
                 raise RuntimeError(f"failed to render mermaid diagram {index}: {detail[:1000] or 'renderer produced no image'}")
             png_dimensions(image_path)
             if cached_path is not None:
@@ -1195,6 +1345,11 @@ def add_template_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_auth_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--username")
+    parser.add_argument("--password")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Tianyin wiki CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1225,42 +1380,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     check_parser = sub.add_parser("check-page")
     check_parser.add_argument("--remote-url")
-    check_parser.add_argument("--auth-type", choices=("basic", "bearer", "none"))
-    check_parser.add_argument("--username")
-    check_parser.add_argument("--password")
-    check_parser.add_argument("--token")
+    add_auth_arguments(check_parser)
     check_parser.set_defaults(func=cmd_check_page)
 
     upload_parser = sub.add_parser("upload-attachment")
     upload_parser.add_argument("--file", required=True)
     upload_parser.add_argument("--remote-url")
-    upload_parser.add_argument("--auth-type", choices=("basic", "bearer", "none"))
-    upload_parser.add_argument("--username")
-    upload_parser.add_argument("--password")
-    upload_parser.add_argument("--token")
+    add_auth_arguments(upload_parser)
     upload_parser.set_defaults(func=cmd_upload_attachment)
 
-    diagnose_parser = sub.add_parser("diagnose-auth")
-    diagnose_parser.add_argument("--remote-url")
-    diagnose_parser.add_argument("--auth-type", choices=("basic", "bearer", "none"))
-    diagnose_parser.add_argument("--username")
-    diagnose_parser.add_argument("--password")
-    diagnose_parser.add_argument("--token")
-    diagnose_parser.set_defaults(func=cmd_diagnose_auth)
-
-    login_url_parser = sub.add_parser("get-login-url")
-    login_url_parser.add_argument("--remote-url")
-    login_url_parser.set_defaults(func=cmd_get_login_url)
+    doctor_parser = sub.add_parser("doctor")
+    doctor_parser.add_argument("--input", help="optional Markdown file to count Mermaid blocks")
+    doctor_parser.add_argument(
+        "--refresh-runtime",
+        action="store_true",
+        help="ignore cached Mermaid/browser probes and rewrite the runtime cache",
+    )
+    doctor_parser.set_defaults(func=cmd_doctor)
 
     publish_parser = sub.add_parser("publish-md")
     publish_parser.add_argument("--input", required=True)
     publish_parser.add_argument("--remote-url")
     publish_parser.add_argument("--title")
     add_template_argument(publish_parser)
-    publish_parser.add_argument("--auth-type", choices=("basic", "bearer", "none"))
-    publish_parser.add_argument("--username")
-    publish_parser.add_argument("--password")
-    publish_parser.add_argument("--token")
+    add_auth_arguments(publish_parser)
 
     publish_parser.add_argument("--mermaid-scale", type=float, default=3.0)
     publish_parser.add_argument(

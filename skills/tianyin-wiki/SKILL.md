@@ -1,55 +1,29 @@
 ---
 name: tianyin-wiki
-description: 生成或更新天印基线详设/1-N 详设 Markdown（基于 PRD、需求上下文或澄清结果）；也支持任意本地 Markdown 直推 Confluence（raw 模式，不校验格式）；仅在用户明确要求时发布。
+description: 生成/更新天印基线或 1-N 详设 Markdown；也可在用户明确确认时将本地 Markdown 直推 Confluence。
 ---
 
 # Tianyin Wiki
 
-主入口：`scripts/tianyin_wiki.py`。发布、附件上传、认证诊断统一使用该 CLI，不新增第二套写入 Wiki 的脚本。
+主入口：`scripts/tianyin_wiki.py`。Windows 优先用 `scripts/tianyin_wiki.ps1` 选择可用 Python。
 
-## 何时使用
+## 路由
 
-- 用户要求将本地任意 Markdown 文档直接发布/同步到 Confluence（触发词：`推送`、`发布`、`同步`、`wiki`）。表述如「把这个文档推送」「指定一个文档进行推送」一律走 `raw` 直推（默认模式，不校验格式）。
-- 用户要求生成/更新基线详设或 1-N 详设（触发词：`基线`、`1-N`、`详设`）时，才使用模板生成；**使用模板前必须与用户确认是基线还是 1-N，不得擅自猜测**。
+- 已给本地 Markdown 并要求推送/发布/同步 Wiki：走 `publish-md` raw 直推；发布前可 `--dry-run`。
+- 要生成详设：先确认 `baseline` 还是 `1-n`，再 `init-template` → 填充 → `lint-doc`。
+- 只读确认远程页：用 `check-page`。
+- 新机器或 Mermaid 慢：用 `doctor`；工具路径缓存异常时加 `--refresh-runtime`。
 
-**决策规则**：上下文已指定要推送的文档 → 走 `raw` 直推，不生成、不校验；上下文未指定文档、要求「生成/生成详设」、需结合上下文生成天印本地 md 再推送 → 才考虑模板生成（`--template default` 为生成流程缺省模板，等同基线），确认基线/1-N 后 `init-template` 生成 → 填充 → `lint-doc` 自查 → 推送。
+## 必守
 
-## 三种模式
+- 远程写入必须有用户明确确认和目标 `remote-url`/配置；本地 md 是唯一事实源。
+- 远程操作前必须有 Python 3.9+ 和 Wiki `username/password`；缺失时要求用户补齐，不继续发布。
+- 不读取、导出或回显密码、Authorization 头或其他认证凭据。
+- 默认 `raw` 不校验结构；只有用户明确基线/1-N 时才读模板并校验。
 
-| 模式 | CLI 标识 | 说明 |
-|---|---|---|
-| 直推本地 md | `raw`（别名 `direct`，**默认**） | 不校验任何格式，直接把本地 Markdown 转为 wiki 页面 |
-| 基线详设 | `baseline` | 按基线模板生成并校验结构，需显式指定 |
-| 1-N 详设 | `1-n` | 按 1-N 模板生成并校验结构，需显式指定 |
+## 按需读取
 
-- 默认模式为 `raw`；命令行显式传 `--template` 优先于配置文件，配置文件 `template` 字段其次（**仅允许 `baseline`/`1-n`，`raw` 是内置默认、不允许写入配置**），未配置时缺省 `raw`。
-- `--template default` 等同 `baseline`，仅在生成详设流程使用。
-- 模板只在用户显式要求基线或 1-N 时使用，二选一必须确认。
-
-## 输出约定（生成本地详设时）
-
-- **输出路径**：优先使用文档约定路径（如 `docs/<功能目录名>/`）；无约定时输出到工作目录 `docs/` 下。
-- **输出文件名**：`DESIGN-<功能名>.md`（功能名按上下文确定，如 `DESIGN-电子签章.md`）。
-- **主标题**：本地文档第一行 `# ` 为文档主标题（仅保留在本地 md）；推送时正文自动剔除，Confluence 页面标题即主标题（`publish-md` 未传 `--title` 时自动取文档主标题）。基线模板章节为一级标题（`# 1.方案背景`），子章节依次升一级；1-N 模板保持原层级。
-- **非必填章节**：所有章节均为非必填；生成文档时如某章节确实不涉及（如无接口新增/变更），保留标题并填写「未涉及」，不要编造内容。章节填写指引**以模板内注释（`references/templates/` 中的 `<!-- ... -->`）为唯一指引源**，本处与 cli-reference.md 中的相关表述仅为摘要；注释只存在于模板源文件：`init-template` 复制时自动剔除、`lint-doc` 校验交付文档不得含注释行、发布/粘贴转换兜底剔除，**生成文档一律不携带注释**。
-
-## 最小流程
-
-1. 初始化模板需**显式指定**：`python .\scripts\tianyin_wiki.py init-template --template baseline|1-n --output <file>.md`（默认 raw 无模板文件，不指定会报错提示）。
-2. 填充内容后用 `lint-doc --template baseline|1-n` 本地自查；发布时结构差异（缺项/多项）仅提示、不阻断推送。
-3. 直推任意本地文档（默认 raw，不校验格式）：`python .\scripts\tianyin_wiki.py publish-md --input <file>.md`。
-4. 发布前可先 `publish-md --dry-run` 确认目标页、版本变化与内容摘要（只读、不写 wiki），再在用户**明确确认**（且上下文中已提供目标地址）后发布：`publish-md --remote-url "<wiki-url>"`。
-
-## 执行边界（必须遵守）
-
-1. **本地 md 是唯一事实源**：改动必须**先落地到本地 md 文件**，禁止跳过本地文件直接修改远程 wiki。
-2. **不自动推送**：更新本地 md 后不立即推送；仅当用户**明确确认**（且上下文中已提供目标地址）时，才用当前本地 md 内容更新 wiki。
-3. 未明确要求发布/未提供目标地址时只处理本地文件；远程发布优先 REST `publish-md`，认证/网关异常先 `diagnose-auth`；浏览器登录态发布仅限用户明确要求。
-4. 不读取、导出或回显密码、token、Cookie、LocalStorage、会话文件、Authorization 头或扫码信息。
-
-## 按需参考（渐进式披露，需要时再读取）
-
-- 完整 CLI 参数、Mermaid 与图片细节：`references/cli-reference.md`
-- 模板结构与填写指引：`references/templates/`（模板内 `<!-- ... -->` 注释为唯一指引源，生成文档时不得保留）
-- 发布与认证（ZeroTrust、浏览器兜底）：`references/remote-publish.md`
-- 环境依赖与凭据配置：`references/setup.md`
+- 参数/Mermaid/附件：`references/cli-reference.md`
+- 发布与账号配置：`references/remote-publish.md`
+- 新机器环境：`references/setup.md`
+- 生成模板细节：`references/templates/`（只读选定模板）
