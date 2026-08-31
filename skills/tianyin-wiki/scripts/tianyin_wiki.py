@@ -538,11 +538,20 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         }
     try:
         command = resolve_mermaid_command(refresh_cache=args.refresh_runtime)
-        result["mermaidRenderer"] = {
+        renderer: dict[str, object] = {
             "available": True,
             "command": command,
             "viaNpx": Path(command[0]).name.lower().startswith("npx"),
         }
+        if renderer["viaNpx"]:
+            renderer["installHint"] = (
+                "mermaid runs via npx (extra startup cost per diagram); install the global CLI once "
+                "to speed up every render: `npm i -g @mermaid-js/mermaid-cli` "
+                "(China mirror: add `--registry=https://registry.npmmirror.com`; set "
+                "PUPPETEER_SKIP_DOWNLOAD=true to reuse the local Chrome/Edge instead of "
+                "downloading Chromium). Then re-run `doctor --refresh-runtime`."
+            )
+        result["mermaidRenderer"] = renderer
     except RuntimeError as exc:
         result["mermaidRenderer"] = {
             "available": False,

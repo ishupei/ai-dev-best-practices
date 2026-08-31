@@ -180,7 +180,7 @@ Windows 可优先使用启动器，它会先选择可用 Python 3.9+；未发现
 .\scripts\tianyin_wiki.ps1 doctor --input .\outputs\detail-design.md
 ```
 
-输出当前 Python 路径、Mermaid 渲染器来源、是否通过 `npx` 回退、自动探测到的 Chrome/Edge 路径，以及可选输入文档中的 Mermaid 图块数量。新机器首次发布较慢时，先用它确认是否缺少浏览器路径或正在走 `npx` 冷启动；频繁发布建议安装全局 `mmdc`。
+输出当前 Python 路径、Mermaid 渲染器来源、是否通过 `npx` 回退、自动探测到的 Chrome/Edge 路径，以及可选输入文档中的 Mermaid 图块数量。新机器首次发布较慢时，先用它确认是否缺少浏览器路径或正在走 `npx` 冷启动；当输出 `viaNpx: true` 时，`installHint` 会给出全局安装 `mmdc` 的完整命令（含国内镜像与跳过 Chromium 下载），装好后重新运行 `doctor --refresh-runtime` 即可生效。
 
 运行时探测结果会缓存到 `~/.cache/tianyin-wiki/runtime.json`，后续 `publish-md` 优先复用缓存，减少环境探测耗时。安装新工具或调整浏览器路径后，用下面的命令刷新缓存：
 

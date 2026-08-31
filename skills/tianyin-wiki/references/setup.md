@@ -34,7 +34,15 @@ Windows 推荐通过启动器执行，它会跳过 Microsoft Store 占位程序�
 python .\scripts\tianyin_wiki.py doctor --input .\outputs\detail-design.md
 ```
 
-若 `doctor` 显示 `viaNpx: true`，首次渲染可能需要下载 Mermaid CLI 包；后续会使用 `npx` 缓存。频繁发布建议全局安装 `mmdc`，可避免每次通过 `npx` 启动带来的额外耗时。
+若 `doctor` 显示 `viaNpx: true`，每次渲染都会多付出 npx 启动开销（实测每张图约 1.3 秒）。**首次安装时建议直接全局装好 `mmdc`**，一次投入持续加速：复用本机 Chrome/Edge 跳过 Chromium 下载，国内网络走 npmmirror 镜像：
+
+```powershell
+set PUPPETEER_SKIP_DOWNLOAD=true
+npm i -g @mermaid-js/mermaid-cli --registry=https://registry.npmmirror.com
+python .\scripts\tianyin_wiki.py doctor --refresh-runtime
+```
+
+装好后 `doctor` 输出 `viaNpx: false`，后续渲染直接走 `mmdc`，不再经过 npx。
 
 `doctor` 和首次 Mermaid 渲染会把本机运行时探测结果写入 `~/.cache/tianyin-wiki/runtime.json`。后续执行会优先复用缓存中的 `mmdc`/`npx` 与浏览器路径，减少每次发布前的环境探测；安装新工具或移动浏览器后，用 `doctor --refresh-runtime` 强制重探测。
 
