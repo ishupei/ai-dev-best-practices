@@ -196,5 +196,76 @@ class BlockRenderingTest(unittest.TestCase):
         )
 
 
+class ExtendedMarkdownTest(unittest.TestCase):
+    def test_angle_bracket_autolink(self) -> None:
+        converted = tianyin_wiki.convert_inline("<https://example.com/auto?a=1&b=2>")
+        self.assertEqual(
+            converted,
+            '<a href="https://example.com/auto?a=1&amp;b=2">https://example.com/auto?a=1&amp;b=2</a>',
+        )
+
+    def test_strikethrough(self) -> None:
+        converted = tianyin_wiki.convert_inline("已废弃 ~~旧内容~~ 保留")
+        self.assertEqual(
+            converted,
+            '已废弃 <span style="text-decoration: line-through;">旧内容</span> 保留',
+        )
+
+    def test_underline_sub_sup_passthrough(self) -> None:
+        converted = tianyin_wiki.convert_inline("<u>下划线</u> H<sub>2</sub>O X<sup>2</sup>")
+        self.assertEqual(
+            converted,
+            "<u>下划线</u> H<sub>2</sub>O X<sup>2</sup>",
+        )
+
+    def test_table_alignment(self) -> None:
+        markdown = (
+            "# 标题\n\n"
+            "| 左 | 中 | 右 |\n"
+            "| :--- | :---: | ---: |\n"
+            "| a | b | c |\n"
+        )
+        storage = tianyin_wiki.markdown_to_storage(markdown)
+        self.assertIn('<th style="text-align: left;"><p>左</p></th>', storage)
+        self.assertIn('<th style="text-align: center;"><p>中</p></th>', storage)
+        self.assertIn('<th style="text-align: right;"><p>右</p></th>', storage)
+        self.assertIn('<td style="text-align: right;"><p>c</p></td>', storage)
+
+    def test_inline_html_comment_stripped(self) -> None:
+        converted = tianyin_wiki.convert_inline("前文 <!-- 待补充 --> 后文")
+        self.assertEqual(converted, "前文  后文")
+
+    def test_reference_links_resolved(self) -> None:
+        markdown = (
+            "# 标题\n\n"
+            "详见 [需求单][req] 和 [旧链接][]。\n\n"
+            "[req]: https://forward-v3.timevale.cn/list?id=20888\n"
+            "[旧链接]: https://example.com/old\n"
+        )
+        storage = tianyin_wiki.markdown_to_storage(markdown)
+        self.assertIn(
+            '<p>详见 <a href="https://forward-v3.timevale.cn/list?id=20888">需求单</a> 和 '
+            '<a href="https://example.com/old">旧链接</a>。</p>',
+            storage,
+        )
+        self.assertNotIn("[req]:", storage)
+
+    def test_reference_link_undefined_kept_literal(self) -> None:
+        converted = tianyin_wiki.convert_inline("文本 [未知][nope] 保持")
+        self.assertEqual(converted, "文本 [未知][nope] 保持")
+
+    def test_reference_link_definition_inside_fence_ignored(self) -> None:
+        markdown = (
+            "# 标题\n\n"
+            "```text\n"
+            "[req]: https://inside-fence.example\n"
+            "```\n\n"
+            "正文 [x][req]\n"
+        )
+        storage = tianyin_wiki.markdown_to_storage(markdown)
+        self.assertIn("[req]: https://inside-fence.example", storage)  # 代码块内原样
+        self.assertIn("正文 [x][req]", storage)  # 未定义，保持字面
+
+
 if __name__ == "__main__":
     unittest.main()

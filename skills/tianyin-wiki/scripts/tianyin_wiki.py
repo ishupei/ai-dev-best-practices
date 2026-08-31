@@ -1006,8 +1006,11 @@ _BARE_URL_RE = re.compile(
     re.IGNORECASE,
 )
 _BARE_URL_TRAILING = ".,;:!?)]"
-# 行内 HTML 标签白名单（如标注色块 span）；白名单外的其他标签一律按普通文本转义
-_INLINE_HTML_TAG_RE = re.compile(r"</?span(?:\s[^>]*)?>|</?br\s*/?>", re.IGNORECASE)
+# 行内 HTML 标签白名单（如标注色块 span、下划线/上下标）；白名单外的其他标签一律按普通文本转义
+_INLINE_HTML_TAG_RE = re.compile(
+    r"</?span(?:\s[^>]*)?>|</?br\s*/?>|</?u>|</?sub>|</?sup>",
+    re.IGNORECASE,
+)
 
 
 def convert_inline(text: str) -> str:
@@ -1040,11 +1043,26 @@ def convert_inline(text: str) -> str:
         lambda m: stash("C", code_spans, f"<code>{html.escape(m.group(1), quote=False)}</code>"),
         text,
     )
+    # 行内 HTML 注释直接剥离（整行注释已在 strip_html_comments 处理）
+    text = re.sub(r"<!--.*?-->", "", text)
+    # 尖括号自动链接 <https://...>：先于 html.escape 处理，否则 &gt; 实体字符会污染 URL；
+    # 暂存时显式转义 URL（此时正文尚未转义）
+    text = re.sub(
+        r"<https?://[^>\s]+>",
+        lambda m: stash(
+            "L",
+            links,
+            f'<a href="{html.escape(m.group(0)[1:-1], quote=False)}">{html.escape(m.group(0)[1:-1], quote=False)}</a>',
+        ),
+        text,
+    )
     # 白名单 HTML 标签暂存原样（先于 html.escape），避免被转义成可见文本
     text = _INLINE_HTML_TAG_RE.sub(lambda m: stash("T", html_tags, m.group(0)), text)
     text = html.escape(text, quote=False)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", text)
+    # 删除线：Confluence 编辑器对删除线的存储表达是 line-through 的 span
+    text = re.sub(r"~~([^~]+)~~", r'<span style="text-decoration: line-through;">\1</span>', text)
     # 图片语法必须先于链接处理，否则 ![alt](url) 会被链接规则匹配成带 ! 前缀的链接
     text = re.sub(r"!\[([^\]]+)\]\(([^)]+)\)", convert_image, text)
     text = re.sub(
@@ -1082,17 +1100,43 @@ def split_table_row(line: str) -> list[str]:
     return cells
 
 
+def parse_table_alignments(separator_line: str) -> list[str | None]:
+    """从分隔行（| --- | :---: | ---: |）解析每列对齐：None=默认，left/center/right。"""
+    aligns: list[str | None] = []
+    for cell in split_table_row(separator_line):
+        cell = cell.strip()
+        if cell.startswith(":") and cell.endswith(":") and len(cell) >= 2:
+            aligns.append("center")
+        elif cell.startswith(":"):
+            aligns.append("left")
+        elif cell.endswith(":"):
+            aligns.append("right")
+        else:
+            aligns.append(None)
+    return aligns
+
+
 def render_table(lines: list[str]) -> str:
     rows = [split_table_row(line) for line in lines if line.strip()]
     if len(rows) < 2:
         return "".join(f"<p>{convert_inline(line.strip())}</p>" for line in lines if line.strip())
     header = rows[0]
-    body = rows[2:] if len(lines) > 1 and is_table_separator(lines[1]) else rows[1:]
+    aligns: list[str | None] = []
+    if len(lines) > 1 and is_table_separator(lines[1]):
+        aligns = parse_table_alignments(lines[1])
+        body = rows[2:]
+    else:
+        body = rows[1:]
+
+    def cell(tag: str, content: str, align: str | None) -> str:
+        style = f' style="text-align: {align};"' if align else ""
+        return f"<{tag}{style}><p>{convert_inline(content)}</p></{tag}>"
+
     out = ["<table><tbody>"]
-    out.append("<tr>" + "".join(f"<th><p>{convert_inline(cell)}</p></th>" for cell in header) + "</tr>")
+    out.append("<tr>" + "".join(cell("th", c, aligns[i]) for i, c in enumerate(header)) + "</tr>")
     for row in body:
         padded = row + [""] * (len(header) - len(row))
-        out.append("<tr>" + "".join(f"<td><p>{convert_inline(cell)}</p></td>" for cell in padded[: len(header)]) + "</tr>")
+        out.append("<tr>" + "".join(cell("td", c, aligns[i]) for i, c in enumerate(padded[: len(header)])) + "</tr>")
     out.append("</tbody></table>")
     return "".join(out)
 
@@ -1176,6 +1220,61 @@ def render_list(lines: list[str]) -> str:
     return "".join(html_parts)
 
 
+def resolve_reference_links(markdown_text: str) -> str:
+    """将引用式链接 [text][ref] / [ref][] 替换为标准 [text](url) 链接并剔除定义行。
+
+    引用定义形如 `[ref]: url`（可带 `<url>` 包裹），仅在代码围栏外识别；
+    [ref] 单独简写形式不做替换，避免误伤普通文本里的方括号。
+    """
+    lines = normalize_newlines(markdown_text).split("\n")
+    definitions: dict[str, str] = {}
+    in_fence = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        match = re.match(r"^\[([^\]]+)\]:\s*<?(\S+?)>?(?:\s+.*)?$", stripped)
+        if match:
+            definitions[match.group(1).lower()] = match.group(2)
+    if not definitions:
+        return markdown_text
+
+    def resolve(match: re.Match) -> str:
+        label = match.group(2).lower()
+        url = definitions.get(label)
+        if not url:
+            return match.group(0)
+        return f"[{match.group(1)}]({url})"
+
+    def resolve_shorthand(match: re.Match) -> str:
+        label = match.group(1).lower()
+        url = definitions.get(label)
+        if not url:
+            return match.group(0)
+        return f"[{match.group(1)}]({url})"
+
+    result: list[str] = []
+    in_fence = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            result.append(line)
+            continue
+        if in_fence:
+            result.append(line)
+            continue
+        if re.match(r"^\[([^\]]+)\]:\s*\S", stripped):
+            continue  # 剔除引用定义行
+        line = re.sub(r"\[([^\]]+)\]\[([^\]]+)\]", resolve, line)
+        line = re.sub(r"\[([^\]]+)\]\[\]", resolve_shorthand, line)
+        result.append(line)
+    return "\n".join(result)
+
+
 def markdown_to_html_blocks(
     markdown_text: str,
     render_code_block: Callable[[list[str]], str],
@@ -1187,7 +1286,7 @@ def markdown_to_html_blocks(
     Shared by publish (storage HTML with rendered Mermaid attachments) and paste
     (plain pre/code blocks); only the code renderer differs per consumer.
     """
-    lines = strip_html_comments(markdown_text).split("\n")
+    lines = strip_html_comments(resolve_reference_links(markdown_text)).split("\n")
     blocks: list[str] = []
     i = 0
     while i < len(lines) and not lines[i].strip():
