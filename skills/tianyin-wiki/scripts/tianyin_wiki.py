@@ -271,9 +271,9 @@ _LINK_SCHEME_TEXT_RE = re.compile(r"!?\[[^\]]*\]\(\s*<?([A-Za-z][A-Za-z0-9+.-]*)
 # 该 wiki 底层存储不支持补充平面字符（emoji 等，实测 500），发布前按行阻断
 _ASTRAL_CHAR_RE = re.compile(r"[\U00010000-\U0010FFFF]")
 # Confluence code macro 支持的语言枚举（对目标实例 wiki.timevale.cn:8081、Confluence 7.9.x
-# 全量实测 2026-08-31，仅 29 种）。白名单外的围栏语言（如 http、json、vb、swift）省略
-# language 参数，降级为无高亮文本。传入非法枚举会让代码宏渲染抛 InvalidValueException
-# 导致整个代码块不显示（页面实测）。
+# 全量实测 2026-08-31，仅 29 种）。白名单外的围栏语言（如 http、json、vb、swift）统一
+# 按 bash 语法渲染（见 render_code_macro），bash 在枚举内不会报错。传入非法枚举会让代码
+# 宏渲染抛 InvalidValueException 导致整个代码块不显示（页面实测）。
 _CODE_LANGUAGE_WHITELIST = frozenset({
     "actionscript", "applescript", "bash", "c", "coldfusion", "cpp", "csharp",
     "css", "delphi", "diff", "erlang", "groovy", "html", "java", "javascript",
@@ -1197,11 +1197,11 @@ def render_raw_html(raw: str) -> str:
 
 
 def render_code_macro(code: str, language: str | None) -> str:
-    """代码宏（围栏语言仅在白名单内保留，白名单外省略 language 参数降级为无高亮）。
+    """代码宏：白名单内保留原语言，白名单外统一降级为 bash 语法。
 
-    Confluence 代码宏对 language 参数做枚举校验，非法值（如 http）会让整个代码块
-    渲染抛 InvalidValueException 而不显示；白名单外省略该参数是安全的降级路径。
-    CDATA 终止符 ]]> 按标准拆分转义。
+    Confluence 代码宏对 language 参数做枚举校验，非法值（如 http、json）会让整个
+    代码块渲染抛 InvalidValueException 而不显示；白名单外语言改按 bash 渲染（bash
+    在实测枚举内），既有高亮又不报错。CDATA 终止符 ]]> 按标准拆分转义。
     """
     code = code.replace("]]>", "]]]]><![CDATA[>")
     language_param = ""
@@ -1211,6 +1211,8 @@ def render_code_macro(code: str, language: str | None) -> str:
             language_param = (
                 f'<ac:parameter ac:name="language">{escape_attr_value(normalized)}</ac:parameter>'
             )
+        else:
+            language_param = '<ac:parameter ac:name="language">bash</ac:parameter>'
     return (
         '<ac:structured-macro ac:name="code">'
         f"{language_param}"
