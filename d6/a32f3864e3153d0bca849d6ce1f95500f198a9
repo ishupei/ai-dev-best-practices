@@ -1,0 +1,16 @@
+skills/tianyin-wiki/scripts/tianyin_wiki.py
+  h_c93c98e603be80 1029-1035,1048-1049,1069-1082,1102-1103,1124-1141,1230-1237
+skills/tianyin-wiki/tests/test_inline_conversion.py
+  h_c93c98e603be80 136-198
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d6a32f3864e3153d0bca849d6ce1f95500f198a9",
+  "prompts": {},
+  "humans": {
+    "h_c93c98e603be80": {
+      "author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
