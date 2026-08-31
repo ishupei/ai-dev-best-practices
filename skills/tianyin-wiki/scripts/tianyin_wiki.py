@@ -644,9 +644,18 @@ def _markdown_parser():
     return build_markdown_parser()
 
 
-def parse_markdown(markdown_text: str) -> "list[Token]":
-    """解析 Markdown 为 token 流；mermaid 提取与 storage 渲染共用同一解析，保证围栏顺序一致。"""
+@lru_cache(maxsize=4)
+def _parse_markdown_cached(markdown_text: str) -> "list[Token]":
+    """按文档内容缓存 token 流：发布流程中 gate/mermaid/storage 多环节共用一次解析。"""
     return _markdown_parser().parse(normalize_newlines(markdown_text))
+
+
+def parse_markdown(markdown_text: str) -> "list[Token]":
+    """解析 Markdown 为 token 流（结果按内容缓存，同一文档只解析一次）。
+
+    渲染与检查环节只读 token（attrGet/content），不修改，缓存可安全共享。
+    """
+    return _parse_markdown_cached(markdown_text)
 
 
 def mermaid_blocks(markdown_text: str) -> list[str]:
