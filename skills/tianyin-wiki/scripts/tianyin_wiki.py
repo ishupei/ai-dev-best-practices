@@ -240,6 +240,28 @@ def normalize_newlines(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+# 裸 URL 自动链接（仅 text token，链接内部不二次包裹）；URL 字符类排除空白、
+# HTML 特殊符、引号及 CJK/全角标点（中文正文中 URL 后常紧跟中文，防止把正文
+# 吞进链接），结尾剩余的 ASCII 句读符号在链接时剥离
+_BARE_URL_RE = re.compile(
+    r"(?<![\w])https?://[^\s<>\"'`\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+",
+    re.IGNORECASE,
+)
+_BARE_URL_TRAILING = ".,;:!?)]"
+# 标记性实体（&lt;/&gt; 等）在比较归一化时保持原样，避免"转义文本"与"真实标签"误判等价
+_MARKUP_ENTITY_RE = re.compile(r"&(?:lt|gt|amp|quot|apos|#\d+;|#x[0-9a-fA-F]+;)")
+# Confluence 保存 span 标注时把十六进制颜色规范化为 rgb() 形式，比较时归一化回 hex
+_RGB_COLOR_RE = re.compile(r"color: rgb\((\d+),\s*(\d+),\s*(\d+)\);?")
+_HTML_TAG_NAME_RE = re.compile(r"</?([A-Za-z][\w:-]*)(?:\s[^>]*)?/?>")
+# raw HTML 白名单（标注色块 span、换行、下划线/上下标）；白名单外一律转义为可见文本
+_SUPPORTED_INLINE_HTML_TAG_NAMES = {"span", "br", "u", "sub", "sup"}
+_SAFE_LINK_PROTOCOLS = {"http", "https", "mailto"}
+# 文本层兜底识别被解析器拒绝的 [x](scheme:...) 链接形态（scheme 白名单外的协议）
+_LINK_SCHEME_TEXT_RE = re.compile(r"!?\[[^\]]*\]\(\s*<?([A-Za-z][A-Za-z0-9+.-]*):")
+# 该 wiki 底层存储不支持补充平面字符（emoji 等，实测 500），发布前按行阻断
+_ASTRAL_CHAR_RE = re.compile(r"[\U00010000-\U0010FFFF]")
+
+
 def normalize_storage_for_compare(value: str) -> str:
     """Normalize Confluence storage serialization for equivalence comparison.
 
@@ -1030,28 +1052,6 @@ def cmd_merge_clear(args: argparse.Namespace) -> int:
 # storage XHTML。解析正确性（嵌套链接、转义、列表、表格、围栏等）由
 # CommonMark/GFM 实现保证；本层只负责"节点 → storage"映射与平台能力边界
 # （协议白名单、raw HTML 白名单、Mermaid 附件、代码宏语言）。
-
-# 裸 URL 自动链接（仅 text token，链接内部不二次包裹）；URL 字符类排除空白、
-# HTML 特殊符、引号及 CJK/全角标点（中文正文中 URL 后常紧跟中文，防止把正文
-# 吞进链接），结尾剩余的 ASCII 句读符号在链接时剥离
-_BARE_URL_RE = re.compile(
-    r"(?<![\w])https?://[^\s<>\"'`\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+",
-    re.IGNORECASE,
-)
-_BARE_URL_TRAILING = ".,;:!?)]"
-# 标记性实体（&lt;/&gt; 等）在比较归一化时保持原样，避免"转义文本"与"真实标签"误判等价
-_MARKUP_ENTITY_RE = re.compile(r"&(?:lt|gt|amp|quot|apos|#\d+;|#x[0-9a-fA-F]+;)")
-# Confluence 保存 span 标注时把十六进制颜色规范化为 rgb() 形式，比较时归一化回 hex
-_RGB_COLOR_RE = re.compile(r"color: rgb\((\d+),\s*(\d+),\s*(\d+)\);?")
-_HTML_TAG_NAME_RE = re.compile(r"</?([A-Za-z][\w:-]*)(?:\s[^>]*)?/?>")
-# raw HTML 白名单（标注色块 span、换行、下划线/上下标）；白名单外一律转义为可见文本
-_SUPPORTED_INLINE_HTML_TAG_NAMES = {"span", "br", "u", "sub", "sup"}
-_SAFE_LINK_PROTOCOLS = {"http", "https", "mailto"}
-# 文本层兜底识别被解析器拒绝的 [x](scheme:...) 链接形态（scheme 白名单外的协议）
-_LINK_SCHEME_TEXT_RE = re.compile(r"!?\[[^\]]*\]\(\s*<?([A-Za-z][A-Za-z0-9+.-]*):")
-# 该 wiki 底层存储不支持补充平面字符（emoji 等，实测 500），发布前按行阻断
-_ASTRAL_CHAR_RE = re.compile(r"[\U00010000-\U0010FFFF]")
-
 
 def escape_attr_value(value: str) -> str:
     """HTML 属性值转义（双引号包裹场景）。"""
