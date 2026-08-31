@@ -1,4 +1,4 @@
 interface:
   display_name: "Tianyin Wiki"
   short_description: "生成天印详设并同步到 Confluence"
-  default_prompt: "Use $tianyin-wiki to generate or update the local Tianyin design markdown from PRD or clarified context. Local md is the single source of truth: write every change to the local md file first and never auto-publish. Publish to Confluence only after explicit user confirmation, using the target wiki URL already provided in the conversation context."
+  default_prompt: "Use $tianyin-wiki. MUST select exactly one route before acting: local generation, document lint, remote read-only, remote publish, or environment repair. Reuse confirmed inputs; read only route-required materials; never scan the workspace or run doctor outside environment repair. Local Markdown is the source of truth. Remote publishing requires explicit user confirmation plus a target page/config; never auto-publish or expose credentials."
