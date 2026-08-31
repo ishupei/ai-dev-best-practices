@@ -270,6 +270,26 @@ _SAFE_LINK_PROTOCOLS = {"http", "https", "mailto"}
 _LINK_SCHEME_TEXT_RE = re.compile(r"!?\[[^\]]*\]\(\s*<?([A-Za-z][A-Za-z0-9+.-]*):")
 # 该 wiki 底层存储不支持补充平面字符（emoji 等，实测 500），发布前按行阻断
 _ASTRAL_CHAR_RE = re.compile(r"[\U00010000-\U0010FFFF]")
+# Confluence code macro 支持的语言枚举（code-plugin 存储值，全部小写）；白名单外的
+# 围栏语言（如 http）省略 language 参数，降级为无高亮文本。传入非法枚举会让代码宏
+# 渲染抛 InvalidValueException 导致整个代码块不显示（页面实测）。
+_CODE_LANGUAGE_WHITELIST = frozenset({
+    "abap", "actionscript", "ada", "apache", "applescript", "asm", "asp",
+    "autoit", "bash", "bat", "blitzbasic", "bnf", "c", "c_mac", "cpp",
+    "csharp", "css", "coldfusion", "cuda", "d", "delphi", "diff", "dockerfile",
+    "dylan", "eiffel", "email", "erlang", "fortran", "freebasic", "genero",
+    "gherkin", "glsl", "groovy", "haskell", "html", "idl", "ini", "inno",
+    "java", "java5", "javascript", "json", "jsp", "julia", "kotlin", "latex",
+    "lisp", "lua", "make", "markdown", "matlab", "mirc", "mxml", "mysql",
+    "nsis", "objc", "ocaml", "ocaml-brief", "oobas", "oracle11", "oracle8",
+    "pascal", "perl", "php", "plsql", "powershell", "prolog", "properties",
+    "providex", "purebasic", "python", "q", "qbasic", "r", "rails", "rebol",
+    "reg", "robots", "ruby", "rust", "sas", "scala", "scheme", "scilab",
+    "sdlbasic", "shell", "sql", "swift", "tcl", "teraterm", "text",
+    "thinbasic", "tsql", "typescript", "unreal", "vb", "vbnet", "vhdl",
+    "vim", "visualfoxpro", "whitespace", "winbatch", "xml", "xorg_conf",
+    "xpp", "yaml", "z80",
+})
 
 
 def normalize_storage_for_compare(value: str) -> str:
@@ -1187,13 +1207,20 @@ def render_raw_html(raw: str) -> str:
 
 
 def render_code_macro(code: str, language: str | None) -> str:
-    """代码宏（保留围栏语言信息）；CDATA 终止符 ]]> 按标准拆分转义。"""
+    """代码宏（围栏语言仅在白名单内保留，白名单外省略 language 参数降级为无高亮）。
+
+    Confluence 代码宏对 language 参数做枚举校验，非法值（如 http）会让整个代码块
+    渲染抛 InvalidValueException 而不显示；白名单外省略该参数是安全的降级路径。
+    CDATA 终止符 ]]> 按标准拆分转义。
+    """
     code = code.replace("]]>", "]]]]><![CDATA[>")
-    language_param = (
-        f'<ac:parameter ac:name="language">{escape_attr_value(language)}</ac:parameter>'
-        if language
-        else ""
-    )
+    language_param = ""
+    if language:
+        normalized = language.strip().lower()
+        if normalized in _CODE_LANGUAGE_WHITELIST:
+            language_param = (
+                f'<ac:parameter ac:name="language">{escape_attr_value(normalized)}</ac:parameter>'
+            )
     return (
         '<ac:structured-macro ac:name="code">'
         f"{language_param}"
