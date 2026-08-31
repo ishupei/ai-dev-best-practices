@@ -1,0 +1,16 @@
+skills/tianyin-wiki/SKILL.md
+  h_c93c98e603be80 8
+skills/tianyin-wiki/references/cli-reference.md
+  h_c93c98e603be80 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f1dce17d05a4e3cd52d516304415a167ad6d937b",
+  "prompts": {},
+  "humans": {
+    "h_c93c98e603be80": {
+      "author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
