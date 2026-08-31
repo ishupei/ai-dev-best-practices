@@ -7,6 +7,7 @@
 | 用途 | 依赖 | 安装/探测方式 |
 |---|---|---|
 | Python 启动 | Python 3.9+ | 必须前置安装；Windows 上若 `python` 指向 Microsoft Store 占位程序且无输出失败，改用 `py -3`、真实 `python.exe` 路径，或 `.\scripts\tianyin_wiki.ps1` 自动选择 |
+| Markdown 解析 | `markdown-it-py`（>= 3） | 渲染层基于 CommonMark/GFM AST 解析，必须安装：`pip install markdown-it-py` |
 | Mermaid 渲染 | `mmdc` 或 `npx` + Chrome/Edge | 推荐 `npm i -g @mermaid-js/mermaid-cli`；脚本按 `PATH` 自动探测 `mmdc`，没有全局 `mmdc` 时回退到 `npx --yes @mermaid-js/mermaid-cli` |
 | Mermaid 浏览器 | Chrome/Edge | 脚本会自动探测常见 Chrome/Edge 安装路径并注入 `PUPPETEER_EXECUTABLE_PATH`；未装或非标准路径时手动设置该环境变量 |
 

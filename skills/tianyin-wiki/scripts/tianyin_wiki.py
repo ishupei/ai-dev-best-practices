@@ -134,6 +134,12 @@ def get_template_file(template_name: str) -> Path:
     raise FileNotFoundError(f"template file not found: {candidate}")
 
 
+def is_table_separator(line: str) -> bool:
+    """模板结构解析用：判断某行是否为 GFM 表格分隔行（| --- | / | :---: |）。"""
+    stripped = line.strip()
+    return stripped.startswith("|") and re.fullmatch(r"\|?[\s:\-|\t]+\|?", stripped) is not None
+
+
 @lru_cache(maxsize=4)
 def parse_template(template_name: str) -> TemplateStructure:
     """Parse a template file once into headings, ancestor chains and table owners."""
@@ -247,8 +253,13 @@ def normalize_storage_for_compare(value: str) -> str:
     否则"转义成文本的标签"（&lt;span&gt;）会被误判为与真实标签（<span>）等价，
     导致真实内容变更被 noChanges 短路跳过（实测见 wiki 页面 span 标注修复）。
     """
-    placeholders = _InlinePlaceholders()
-    value = _MARKUP_ENTITY_RE.sub(lambda m: placeholders.stash("E", m.group(0)), value)
+    held: list[str] = []
+
+    def hold_markup_entity(match: re.Match) -> str:
+        held.append(match.group(0))
+        return f"\x00E{len(held) - 1}\x00"
+
+    value = _MARKUP_ENTITY_RE.sub(hold_markup_entity, value)
     value = html.unescape(value)
     # Confluence 保存 span 标注时会把它十六进制颜色规范化为 rgb() 形式（如
     # color:#16a34a -> color: rgb(22,163,74);），归一化后同一内容重复推送不再误判变更
@@ -258,7 +269,7 @@ def normalize_storage_for_compare(value: str) -> str:
     )
     value = re.sub(r'\s*ac:macro-id=["\'][^"\']*["\']', "", value)
     value = re.sub(r'\s*ac:schema-version=["\'][^"\']*["\']', "", value)
-    return placeholders.restore(value)
+    return re.sub(r"\x00E(\d+)\x00", lambda m: held[int(m.group(1))], value)
 
 
 def strip_html_comments(markdown_text: str) -> str:
@@ -579,27 +590,41 @@ def fetch_attachment_titles(config: RuntimeConfig) -> set[str]:
     return titles
 
 
+def build_markdown_parser():
+    """CommonMark + GFM 扩展（表格/删除线）解析器。
+
+    解析正确性（嵌套链接、转义、列表、表格、围栏等）由 markdown-it-py 的
+    CommonMark/GFM 实现保证，本模块只负责"节点 → Confluence storage"映射。
+    """
+    try:
+        from markdown_it import MarkdownIt
+    except ImportError as exc:
+        raise RuntimeError(
+            "missing dependency: install markdown-it-py (pip install markdown-it-py)"
+        ) from exc
+    md = MarkdownIt("commonmark", {"html": True})
+    md.enable("table")
+    md.enable("strikethrough")
+    return md
+
+
+@lru_cache(maxsize=1)
+def _markdown_parser():
+    return build_markdown_parser()
+
+
+def parse_markdown(markdown_text: str) -> list:
+    """解析 Markdown 为 token 流；mermaid 提取与 storage 渲染共用同一解析，保证围栏顺序一致。"""
+    return _markdown_parser().parse(normalize_newlines(markdown_text))
+
+
 def mermaid_blocks(markdown_text: str) -> list[str]:
-    if "```mermaid" not in markdown_text.lower():
-        return []
-    lines = normalize_newlines(markdown_text).split("\n")
-    blocks: list[str] = []
-    i = 0
-    while i < len(lines):
-        stripped = lines[i].strip()
-        if not stripped.startswith("```") or stripped[3:].strip().lower() != "mermaid":
-            i += 1
-            continue
-        i += 1
-        code_lines: list[str] = []
-        while i < len(lines) and not lines[i].strip().startswith("```"):
-            code_lines.append(lines[i])
-            i += 1
-        if i >= len(lines):
-            raise ValueError("unterminated mermaid code fence")
-        blocks.append("\n".join(code_lines).strip())
-        i += 1
-    return blocks
+    """按 token 流提取 mermaid 围栏源码（与渲染阶段顺序一致，含 ~~~ 围栏）。"""
+    return [
+        token.content
+        for token in parse_markdown(markdown_text)
+        if token.type == "fence" and token.info.strip().lower().startswith("mermaid")
+    ]
 
 
 def resolve_mermaid_command(
@@ -897,7 +922,9 @@ def cmd_lint_doc(args: argparse.Namespace) -> int:
     input_path = Path(args.input).resolve()
     if not input_path.exists():
         return error(f"markdown file not found: {input_path}")
-    issues = lint_markdown_text(read_text(input_path), resolve_template(args))
+    markdown_text = read_text(input_path)
+    issues = lint_markdown_text(markdown_text, resolve_template(args))
+    issues.extend(markdown_conversion_issues(markdown_text))
     if issues:
         for issue in issues:
             print(issue, file=sys.stderr)
@@ -988,200 +1015,80 @@ def cmd_merge_clear(args: argparse.Namespace) -> int:
     return 0
 
 
-# 裸 URL 自动链接（不含协议相对地址与 www. 形式）；URL 字符类排除空白、HTML
-# 特殊符、引号及 CJK/全角标点（中文正文中 URL 后常紧跟中文，防止把正文吞进链接），
-# 结尾剩余的 ASCII 句读符号在链接时剥离
+# ==== Markdown → Confluence storage（CommonMark/GFM AST 渲染） ====
+#
+# 以 markdown-it-py 将 Markdown 解析为结构化 token 流，再映射为 Confluence
+# storage XHTML。解析正确性（嵌套链接、转义、列表、表格、围栏等）由
+# CommonMark/GFM 实现保证；本层只负责"节点 → storage"映射与平台能力边界
+# （协议白名单、raw HTML 白名单、Mermaid 附件、代码宏语言）。
+
+# 裸 URL 自动链接（仅 text token，链接内部不二次包裹）；URL 字符类排除空白、
+# HTML 特殊符、引号及 CJK/全角标点（中文正文中 URL 后常紧跟中文，防止把正文
+# 吞进链接），结尾剩余的 ASCII 句读符号在链接时剥离
 _BARE_URL_RE = re.compile(
     r"(?<![\w])https?://[^\s<>\"'`\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+",
     re.IGNORECASE,
 )
 _BARE_URL_TRAILING = ".,;:!?)]"
-# 行内 HTML 标签白名单（如标注色块 span、下划线/上下标）；白名单外的其他标签一律按普通文本转义
-_INLINE_HTML_TAG_RE = re.compile(
-    r"</?span(?:\s[^>]*)?>|</?br\s*/?>|</?u>|</?sub>|</?sup>",
-    re.IGNORECASE,
-)
-# 行内转换的其余正则统一提升为模块级常量，与 _BARE_URL_RE 风格一致
-_CODE_SPAN_RE = re.compile(r"`([^`]+)`")
-_INLINE_COMMENT_RE = re.compile(r"<!--.*?-->")
-# 尖括号自动链接带 (?<!\() 前缀：`[x](<url>)` 里的尖括号形式交给 _MD_LINK_RE 处理，
-# 避免自动链接先吞掉链接目标
-_ANGLE_AUTOLINK_RE = re.compile(r"(?<!\()<https?://[^>\s]+>")
-_BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
-_ITALIC_RE = re.compile(r"\*([^*]+)\*")
-_STRIKE_RE = re.compile(r"~~([^~]+)~~")
-_IMAGE_RE = re.compile(r"!\[([^\]]+)\]\(([^)]+)\)")
-# 链接目标 <url> 包裹形式（CommonMark）在转义前剥离尖括号，避免转义后 &lt; &gt; 污染 href
-_MD_LINK_ANGLE_RE = re.compile(r"\[([^\]]+)\]\(<([^>]+)>\)")
-_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-_LIST_ITEM_RE = re.compile(r"^\s*(\d+\.|-)\s+")
 # 标记性实体（&lt;/&gt; 等）在比较归一化时保持原样，避免"转义文本"与"真实标签"误判等价
 _MARKUP_ENTITY_RE = re.compile(r"&(?:lt|gt|amp|quot|apos|#\d+;|#x[0-9a-fA-F]+;)")
 # Confluence 保存 span 标注时把十六进制颜色规范化为 rgb() 形式，比较时归一化回 hex
 _RGB_COLOR_RE = re.compile(r"color: rgb\((\d+),\s*(\d+),\s*(\d+)\);?")
-
-
-class _InlinePlaceholders:
-    """行内转换占位符暂存器。
-
-    stash 把待还原片段暂存并以 \\x00<kind><n>\\x00 占位；restore 迭代还原直到无残留，
-    因此支持任意嵌套（如链接文本内再含链接 token 时自动先外后内展开，索引单调递增
-    保证必然终止）。kind 区分用途：C=行内代码、T=白名单 HTML 标签、L=链接/图片宏、
-    E=比较归一化暂存实体。
-    """
-
-    def __init__(self) -> None:
-        self._stores: dict[str, list[str]] = {}
-
-    def stash(self, kind: str, value: str) -> str:
-        store = self._stores.setdefault(kind, [])
-        store.append(value)
-        return f"\x00{kind}{len(store) - 1}\x00"
-
-    def restore(self, value: str) -> str:
-        patterns = {kind: re.compile(rf"\x00{kind}(\d+)\x00") for kind in self._stores}
-        while True:
-            replaced = 0
-            for kind, pattern in patterns.items():
-                value, count = pattern.subn(lambda m: self._stores[kind][int(m.group(1))], value)
-                replaced += count
-            if not replaced:
-                return value
+_HTML_TAG_NAME_RE = re.compile(r"</?([A-Za-z][\w:-]*)(?:\s[^>]*)?/?>")
+# raw HTML 白名单（标注色块 span、换行、下划线/上下标）；白名单外一律转义为可见文本
+_SUPPORTED_INLINE_HTML_TAG_NAMES = {"span", "br", "u", "sub", "sup"}
+_SAFE_LINK_PROTOCOLS = {"http", "https", "mailto"}
+# 文本层兜底识别被解析器拒绝的 [x](scheme:...) 链接形态（scheme 白名单外的协议）
+_LINK_SCHEME_TEXT_RE = re.compile(r"!?\[[^\]]*\]\(\s*<?([A-Za-z][A-Za-z0-9+.-]*):")
+# 该 wiki 底层存储不支持补充平面字符（emoji 等，实测 500），发布前按行阻断
+_ASTRAL_CHAR_RE = re.compile(r"[\U00010000-\U0010FFFF]")
 
 
 def escape_attr_value(value: str) -> str:
-    """补齐双引号转义，用于把已做 &<> 转义的文本拼进双引号包裹的 HTML 属性。"""
-    return value.replace('"', "&quot;")
+    """HTML 属性值转义（双引号包裹场景）。"""
+    return html.escape(value, quote=True)
 
 
-def convert_inline(text: str) -> str:
-    placeholders = _InlinePlaceholders()
-
-    def link_bare_url(match: re.Match) -> str:
-        url = match.group(0).rstrip(_BARE_URL_TRAILING)
-        return f'<a href="{escape_attr_value(url)}">{url}</a>'
-
-    def convert_autolink(match: re.Match) -> str:
-        url = html.escape(match.group(0)[1:-1], quote=False)
-        return placeholders.stash("L", f'<a href="{escape_attr_value(url)}">{url}</a>')
-
-    def convert_image(match: re.Match) -> str:
-        alt, url = match.group(1), match.group(2)
-        if re.match(r"https?://", url, re.IGNORECASE):
-            # 外链图片转 Confluence 图片宏；本地相对路径无附件上传能力，回退为链接
-            return placeholders.stash("L", f'<ac:image><ri:url ri:value="{escape_attr_value(url)}"/></ac:image>')
-        return placeholders.stash("L", f'<a href="{escape_attr_value(url)}">{alt}</a>')
-
-    # 行内代码最先暂存并转义内容：代码里的标签文本（如 `x <span> y`）保持文本形态，
-    # 不会在后续还原时变成真实标签
-    text = _CODE_SPAN_RE.sub(
-        lambda m: placeholders.stash("C", f"<code>{html.escape(m.group(1), quote=False)}</code>"),
-        text,
-    )
-    # 行内 HTML 注释直接剥离（整行注释已在 strip_html_comments 处理）
-    text = _INLINE_COMMENT_RE.sub("", text)
-    # [x](<url>) 形式先剥离尖括号（先于自动链接与 html.escape，防止 href 被 &lt; 污染）
-    text = _MD_LINK_ANGLE_RE.sub(r"[\1](\2)", text)
-    # 尖括号自动链接 <https://...>：先于 html.escape 处理，否则 &gt; 实体字符会污染 URL
-    text = _ANGLE_AUTOLINK_RE.sub(convert_autolink, text)
-    # 白名单 HTML 标签暂存原样（先于 html.escape），避免被转义成可见文本
-    text = _INLINE_HTML_TAG_RE.sub(lambda m: placeholders.stash("T", m.group(0)), text)
-    text = html.escape(text, quote=False)
-    text = _BOLD_RE.sub(r"<strong>\1</strong>", text)
-    text = _ITALIC_RE.sub(r"<em>\1</em>", text)
-    # 删除线：Confluence 编辑器对删除线的存储表达是 line-through 的 span
-    text = _STRIKE_RE.sub(r'<span style="text-decoration: line-through;">\1</span>', text)
-    # 图片语法必须先于链接处理，否则 ![alt](url) 会被链接规则匹配成带 ! 前缀的链接
-    text = _IMAGE_RE.sub(convert_image, text)
-    text = _MD_LINK_RE.sub(
-        lambda m: placeholders.stash("L", f'<a href="{escape_attr_value(m.group(2))}">{m.group(1)}</a>'),
-        text,
-    )
-    text = _BARE_URL_RE.sub(link_bare_url, text)
-    return placeholders.restore(text)
+def is_safe_link_url(url: str) -> bool:
+    """链接/图片目标协议白名单：http/https/mailto 与相对路径/锚点；javascript: 等拒绝。"""
+    stripped = url.strip()
+    if not stripped or stripped.startswith("#"):
+        return True
+    scheme = urllib.parse.urlsplit(stripped).scheme.lower()
+    return scheme in _SAFE_LINK_PROTOCOLS or scheme == ""
 
 
-def is_table_separator(line: str) -> bool:
-    stripped = line.strip()
-    return stripped.startswith("|") and re.fullmatch(r"\|?[\s:\-|\t]+\|?", stripped) is not None
+def render_raw_html(raw: str) -> str:
+    """raw HTML：HTML 注释剔除；白名单标签原样透传；其余转义为可见文本。"""
+    stripped = raw.strip()
+    if stripped.startswith("<!--"):
+        return ""
+    tag_match = _HTML_TAG_NAME_RE.match(stripped)
+    if tag_match and tag_match.group(1).lower() in _SUPPORTED_INLINE_HTML_TAG_NAMES:
+        return raw
+    return html.escape(raw, quote=False)
 
 
-def split_table_row(line: str) -> list[str]:
-    """按 | 分割表格行；行内代码（反引号包裹）中的 | 不参与分割。"""
-    cells: list[str] = []
-    current: list[str] = []
-    in_code = False
-    for char in line.strip().strip("|"):
-        if char == "`":
-            in_code = not in_code
-        if char == "|" and not in_code:
-            cells.append("".join(current).strip())
-            current = []
-        else:
-            current.append(char)
-    cells.append("".join(current).strip())
-    return cells
-
-
-def parse_table_alignments(separator_cells: list[str]) -> list[str | None]:
-    """从分隔行单元格（:--- / :---: / ---:）解析每列对齐：None=默认，left/center/right。"""
-    aligns: list[str | None] = []
-    for cell in separator_cells:
-        cell = cell.strip()
-        if cell.startswith(":") and cell.endswith(":") and len(cell) >= 2:
-            aligns.append("center")
-        elif cell.startswith(":"):
-            aligns.append("left")
-        elif cell.endswith(":"):
-            aligns.append("right")
-        else:
-            aligns.append(None)
-    return aligns
-
-
-def render_table(lines: list[str]) -> str:
-    rows = [split_table_row(line) for line in lines if line.strip()]
-    if len(rows) < 2:
-        return "".join(f"<p>{convert_inline(line.strip())}</p>" for line in lines if line.strip())
-    header = rows[0]
-    aligns: list[str | None] = []
-    if len(lines) > 1 and is_table_separator(lines[1]):
-        # rows[1] 即分隔行已分割结果，无需二次分割
-        aligns = parse_table_alignments(rows[1])
-        body = rows[2:]
-    else:
-        body = rows[1:]
-    # 分隔行列数可能少于表头（手写表格常见），不足列按默认对齐补齐，避免下标越界
-    aligns = aligns + [None] * (len(header) - len(aligns))
-
-    def cell(tag: str, content: str, align: str | None) -> str:
-        style = f' style="text-align: {align};"' if align else ""
-        return f"<{tag}{style}><p>{convert_inline(content)}</p></{tag}>"
-
-    out = ["<table><tbody>"]
-    out.append("<tr>" + "".join(cell("th", c, aligns[i]) for i, c in enumerate(header)) + "</tr>")
-    for row in body:
-        padded = row + [""] * (len(header) - len(row))
-        out.append("<tr>" + "".join(cell("td", c, aligns[i]) for i, c in enumerate(padded[: len(header)])) + "</tr>")
-    out.append("</tbody></table>")
-    return "".join(out)
-
-
-def render_code(lines: list[str]) -> str:
-    code = "\n".join(lines)
-    # CDATA 内不允许出现终止符 ]]>，否则宏内容会被截断；按标准拆分转义
+def render_code_macro(code: str, language: str | None) -> str:
+    """代码宏（保留围栏语言信息）；CDATA 终止符 ]]> 按标准拆分转义。"""
     code = code.replace("]]>", "]]]]><![CDATA[>")
+    language_param = (
+        f'<ac:parameter ac:name="language">{html.escape(language, quote=True)}</ac:parameter>'
+        if language
+        else ""
+    )
     return (
         '<ac:structured-macro ac:name="code">'
+        f"{language_param}"
         '<ac:parameter ac:name="theme">Emacs</ac:parameter>'
         f'<ac:plain-text-body><![CDATA[{code}]]></ac:plain-text-body>'
         "</ac:structured-macro>"
     )
 
 
-def render_code_for_paste(lines: list[str]) -> str:
-    code = html.escape("\n".join(lines))
-    return f"<pre><code>{code}</code></pre>"
+def render_code_for_paste(code: str, language: str | None) -> str:
+    del language
+    return f"<pre><code>{html.escape(code)}</code></pre>"
 
 
 def render_attachment_image(filename: str, width: int | None = None) -> str:
@@ -1191,206 +1098,199 @@ def render_attachment_image(filename: str, width: int | None = None) -> str:
     return f"<ac:image>{attachment}</ac:image>"
 
 
-def render_blockquote(lines: list[str]) -> str:
-    """`> ` 开头行集合转 blockquote；空行分段，段内多行以空格连接成一段。"""
-    paragraphs: list[str] = []
-    buffer: list[str] = []
-    for raw in lines:
-        content = re.sub(r"^\s*>\s?", "", raw).strip()
-        if not content:
-            if buffer:
-                paragraphs.append(" ".join(buffer))
-                buffer = []
-            continue
-        buffer.append(content)
-    if buffer:
-        paragraphs.append(" ".join(buffer))
-    body = "".join(f"<p>{convert_inline(paragraph)}</p>" for paragraph in paragraphs)
-    return f"<blockquote>{body}</blockquote>"
+def linkify_text_token(content: str, *, in_link: bool) -> str:
+    """text token 内裸 URL 自动链接；链接内部（in_link）不二次包裹。"""
+    escaped = html.escape(content, quote=False)
+    if in_link:
+        return escaped
+    parts: list[str] = []
+    pos = 0
+    for match in _BARE_URL_RE.finditer(escaped):
+        parts.append(escaped[pos : match.start()])
+        url = match.group(0).rstrip(_BARE_URL_TRAILING)
+        parts.append(f'<a href="{escape_attr_value(url)}">{url}</a>')
+        pos = match.end()
+    parts.append(escaped[pos:])
+    return "".join(parts)
 
 
-def render_list(lines: list[str]) -> str:
-    stack: list[int] = []
-    html_parts: list[str] = []
-    tags: list[str] = []
-
-    for raw in lines:
-        indent = len(raw) - len(raw.lstrip(" "))
-        level = indent // 2
-        # 标记解析只做一次：既判类型又定位内容起点
-        marker = _LIST_ITEM_RE.match(raw)
-        ordered = bool(marker and marker.group(1) != "-")
-        tag = "ol" if ordered else "ul"
-        content = raw[marker.end() :].strip() if marker else raw.strip()
-
-        while stack and stack[-1] > level:
-            html_parts.append("</li></" + tags.pop() + ">")
-            stack.pop()
-        if not stack or stack[-1] < level:
-            html_parts.append(f"<{tag}><li>")
-            stack.append(level)
-            tags.append(tag)
-        else:
-            current_tag = tags[-1]
-            if current_tag != tag:
-                html_parts.append("</li></" + tags.pop() + ">")
-                stack.pop()
-                html_parts.append(f"<{tag}><li>")
-                stack.append(level)
-                tags.append(tag)
+def render_inline(tokens: list) -> str:
+    """inline token 子节点 → storage 行内 XHTML。"""
+    out: list[str] = []
+    link_depth = 0
+    for token in tokens:
+        token_type = token.type
+        if token_type == "text":
+            out.append(linkify_text_token(token.content, in_link=link_depth > 0))
+        elif token_type == "text_special":
+            out.append(html.escape(token.content, quote=False))
+        elif token_type == "code_inline":
+            out.append(f"<code>{html.escape(token.content, quote=False)}</code>")
+        elif token_type == "softbreak":
+            out.append("\n")
+        elif token_type == "hardbreak":
+            out.append("<br />")
+        elif token_type == "em_open":
+            out.append("<em>")
+        elif token_type == "em_close":
+            out.append("</em>")
+        elif token_type == "strong_open":
+            out.append("<strong>")
+        elif token_type == "strong_close":
+            out.append("</strong>")
+        elif token_type == "s_open":
+            # Confluence 编辑器对删除线的存储表达是 line-through 的 span
+            out.append('<span style="text-decoration: line-through;">')
+        elif token_type == "s_close":
+            out.append("</span>")
+        elif token_type == "link_open":
+            href = token.attrGet("href") or ""
+            if is_safe_link_url(href):
+                out.append(f'<a href="{escape_attr_value(href)}"')
+                title = token.attrGet("title")
+                if title:
+                    out.append(f' title="{escape_attr_value(title)}"')
+                out.append(">")
+                link_depth += 1
+            # 不安全协议：链接整体按普通文本输出，不生成锚点（由 gate 另行告警）
+        elif token_type == "link_close":
+            if link_depth:
+                out.append("</a>")
+                link_depth -= 1
+        elif token_type == "image":
+            src = token.attrGet("src") or ""
+            if src.startswith(("http://", "https://")):
+                out.append(f'<ac:image><ri:url ri:value="{escape_attr_value(src)}"/></ac:image>')
             else:
-                html_parts.append("</li><li>")
-        html_parts.append(convert_inline(content))
-
-    while stack:
-        html_parts.append("</li></" + tags.pop() + ">")
-        stack.pop()
-    return "".join(html_parts)
-
-
-def resolve_reference_links(markdown_text: str) -> str:
-    """将引用式链接 [text][ref] / [ref][] 替换为标准 [text](url) 链接并剔除定义行。
-
-    引用定义形如 `[ref]: url`（可带 `<url>` 包裹），仅在代码围栏外识别；
-    [ref] 单独简写形式不做替换，避免误伤普通文本里的方括号。
-    """
-    lines = normalize_newlines(markdown_text).split("\n")
-    definitions: dict[str, str] = {}
-    in_fence = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
-        match = re.match(r"^\[([^\]]+)\]:\s*<?(\S+?)>?(?:\s+.*)?$", stripped)
-        if match:
-            definitions[match.group(1).lower()] = match.group(2)
-    if not definitions:
-        return markdown_text
-
-    def resolve(match: re.Match) -> str:
-        label = match.group(2).lower()
-        url = definitions.get(label)
-        if not url:
-            return match.group(0)
-        return f"[{match.group(1)}]({url})"
-
-    def resolve_shorthand(match: re.Match) -> str:
-        label = match.group(1).lower()
-        url = definitions.get(label)
-        if not url:
-            return match.group(0)
-        return f"[{match.group(1)}]({url})"
-
-    result: list[str] = []
-    in_fence = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            in_fence = not in_fence
-            result.append(line)
-            continue
-        if in_fence:
-            result.append(line)
-            continue
-        if re.match(r"^\[([^\]]+)\]:\s*\S", stripped):
-            continue  # 剔除引用定义行
-        line = re.sub(r"\[([^\]]+)\]\[([^\]]+)\]", resolve, line)
-        line = re.sub(r"\[([^\]]+)\]\[\]", resolve_shorthand, line)
-        result.append(line)
-    return "\n".join(result)
+                out.append(f'<a href="{escape_attr_value(src)}">{html.escape(token.content or "", quote=False)}</a>')
+        elif token_type == "html_inline":
+            out.append(render_raw_html(token.content))
+        else:
+            out.append(token.content)
+    return "".join(out)
 
 
-def markdown_to_html_blocks(
-    markdown_text: str,
-    render_code_block: Callable[[list[str]], str],
+def render_block_tokens(
+    tokens: list,
     mermaid_images: list[str] | None = None,
     image_width: int | list[int] | None = None,
+    code_renderer=None,
 ) -> str:
-    """Convert markdown (guidance comments stripped) into Confluence-ish HTML blocks.
+    """token 流 → storage XHTML。
 
-    Shared by publish (storage HTML with rendered Mermaid attachments) and paste
-    (plain pre/code blocks); only the code renderer differs per consumer.
+    mermaid 围栏按出现顺序映射附件文件名；文档开头第一个一级标题视为本地
+    主标题剔除（wiki 页面标题取代之）。
     """
-    lines = strip_html_comments(resolve_reference_links(markdown_text)).split("\n")
-    blocks: list[str] = []
-    i = 0
-    while i < len(lines) and not lines[i].strip():
-        i += 1
-    if i < len(lines) and re.match(r"^#\s+\S", lines[i].strip()):
-        i += 1  # 主标题只保留在本地 md，wiki 页面标题即主标题，正文剔除
+    out: list[str] = []
+    containers: list[str] = []
     mermaid_index = 0
-    while i < len(lines):
-        stripped = lines[i].strip()
-        if not stripped:
-            i += 1
+    skip_head = bool(tokens) and tokens[0].type == "heading_open" and tokens[0].tag == "h1"
+    block_code_renderer = code_renderer or render_code_macro
+
+    for token in tokens:
+        token_type = token.type
+        if skip_head:
+            if token_type == "heading_close":
+                skip_head = False
             continue
-        if stripped == "---":
-            blocks.append("<hr />")
-            i += 1
+        if token_type == "inline":
+            rendered = render_inline(token.children or [])
+            top = containers[-1] if containers else ""
+            if top in ("th", "td"):
+                out.append(f"<p>{rendered}</p>")
+            elif top in ("li", "p", "h1", "h2", "h3", "h4", "h5", "h6"):
+                out.append(rendered)
+            else:
+                out.append(f"<p>{rendered}</p>")
             continue
-        if stripped.startswith("```"):
-            language = stripped[3:].strip().lower()
-            code_lines: list[str] = []
-            i += 1
-            while i < len(lines) and not lines[i].strip().startswith("```"):
-                code_lines.append(lines[i])
-                i += 1
-            i += 1
-            if language == "mermaid" and mermaid_images is not None:
+        if token_type == "heading_open":
+            out.append(f"<{token.tag}>")
+            containers.append(token.tag)
+            continue
+        if token_type == "ordered_list_open":
+            start = token.attrGet("start")
+            attrs = f' start="{int(start)}"' if start and int(start) != 1 else ""
+            out.append(f"<ol{attrs}>")
+            containers.append("ol")
+            continue
+        if token_type == "bullet_list_open":
+            out.append("<ul>")
+            containers.append("ul")
+            continue
+        if token_type == "list_item_open":
+            out.append("<li>")
+            containers.append("li")
+            continue
+        if token_type in ("paragraph_open", "blockquote_open", "tr_open"):
+            if not getattr(token, "hidden", False):
+                out.append(f"<{token.tag}>")
+            containers.append(token.tag)
+            continue
+        if token_type in ("th_open", "td_open"):
+            tag = "th" if token_type == "th_open" else "td"
+            style = token.attrGet("style")
+            attrs = f' style="{style}"' if style else ""
+            out.append(f"<{tag}{attrs}>")
+            containers.append(tag)
+            continue
+        if token_type == "table_open":
+            out.append("<table><tbody>")
+            containers.append("table")
+            continue
+        if token_type in ("thead_open", "tbody_open"):
+            containers.append(token_type[:-5])  # thead/tbody 占位对齐，不输出标签
+            continue
+        if token_type == "hr":
+            out.append("<hr />")
+            continue
+        if token_type == "fence":
+            info = token.info.strip().lower()
+            if info.startswith("mermaid") and mermaid_images is not None:
                 if mermaid_index >= len(mermaid_images):
                     raise ValueError("missing rendered Mermaid attachment")
                 width = image_width[mermaid_index] if isinstance(image_width, list) else image_width
-                blocks.append(render_attachment_image(mermaid_images[mermaid_index], width))
+                out.append(render_attachment_image(mermaid_images[mermaid_index], width))
                 mermaid_index += 1
             else:
-                blocks.append(render_code_block(code_lines))
+                language = token.info.split()[0] if token.info.strip() else None
+                out.append(block_code_renderer(token.content, language))
             continue
-        if stripped.startswith("#"):
-            level = min(max(len(stripped) - len(stripped.lstrip("#")), 1), 6)
-            title = stripped[level:].strip()
-            blocks.append(f"<h{level}>{convert_inline(title)}</h{level}>")
-            i += 1
+        if token_type == "code_block":
+            out.append(block_code_renderer(token.content, None))
             continue
-        if stripped.startswith(">"):
-            quote_lines = [lines[i]]
-            i += 1
-            while i < len(lines) and lines[i].strip().startswith(">"):
-                quote_lines.append(lines[i])
-                i += 1
-            blocks.append(render_blockquote(quote_lines))
+        if token_type == "html_block":
+            rendered = render_raw_html(token.content)
+            if rendered:
+                out.append(rendered if rendered.startswith("<") else f"<p>{rendered}</p>")
             continue
-        if stripped.startswith("|"):
-            table_lines = [lines[i]]
-            i += 1
-            while i < len(lines) and lines[i].strip().startswith("|"):
-                table_lines.append(lines[i])
-                i += 1
-            blocks.append(render_table(table_lines))
+        if token_type == "image":
+            out.append(f"<p>{render_inline([token])}</p>")
             continue
-        if _LIST_ITEM_RE.match(lines[i]):
-            list_lines = [lines[i]]
-            i += 1
-            while i < len(lines) and (not lines[i].strip() or _LIST_ITEM_RE.match(lines[i])):
-                if lines[i].strip():
-                    list_lines.append(lines[i])
-                i += 1
-            blocks.append(render_list(list_lines))
+        if token_type.endswith("_close"):
+            if token_type == "table_close":
+                out.append("</tbody></table>")
+            elif token_type in ("thead_close", "tbody_close"):
+                pass
+            elif token_type == "paragraph_close" and getattr(token, "hidden", False):
+                pass
+            else:
+                out.append(f"</{token.tag}>")
+            if containers:
+                containers.pop()
             continue
-        paragraph_lines = [lines[i].strip()]
-        i += 1
-        while i < len(lines):
-            candidate = lines[i].strip()
-            if not candidate or candidate.startswith("#") or candidate.startswith("|") or candidate == "---" or candidate.startswith("```") or _LIST_ITEM_RE.match(lines[i]):
-                break
-            paragraph_lines.append(candidate)
-            i += 1
-        blocks.append(f"<p>{convert_inline(' '.join(paragraph_lines))}</p>")
     if mermaid_images is not None and mermaid_index != len(mermaid_images):
         raise ValueError("unused rendered Mermaid attachments")
-    return "".join(blocks)
+    return "".join(out)
+
+
+def encode_supplementary_plane(value: str) -> str:
+    """补充平面字符（U+10000 以上）替换为安全占位。
+
+    该 wiki 底层存储不支持 4 字节 UTF-8：实测直接提交或实体形式（&#x...;）都会
+    HTTP 500（Confluence 保存时解码实体后仍撞数据库限制）。发布前由 gate 按行
+    阻断并提示，此处兜底替换避免任何路径把非法字符提交到远端。
+    """
+    return re.sub(r"[\U00010000-\U0010FFFF]", "□", value)
 
 
 def markdown_to_storage(
@@ -1398,11 +1298,74 @@ def markdown_to_storage(
     mermaid_images: list[str] | None = None,
     image_width: int | list[int] | None = None,
 ) -> str:
-    return markdown_to_html_blocks(markdown_text, render_code, mermaid_images, image_width)
+    tokens = parse_markdown(markdown_text)
+    return encode_supplementary_plane(render_block_tokens(tokens, mermaid_images, image_width))
 
 
 def markdown_to_paste_html(markdown_text: str) -> str:
-    return "<html><body>" + markdown_to_html_blocks(markdown_text, render_code_for_paste) + "</body></html>"
+    tokens = parse_markdown(markdown_text)
+    body = render_block_tokens(tokens, code_renderer=render_code_for_paste)
+    return "<html><body>" + body + "</body></html>"
+
+
+def markdown_conversion_issues(markdown_text: str) -> list[str]:
+    """返回会被渲染层降级/阻断的构造清单（publish/paste/lint 前调用，含行号）。"""
+    issues: list[str] = []
+
+    def add(line_number: int | None, message: str) -> None:
+        issue = f"line {line_number}: {message}" if line_number else message
+        if issue not in issues:
+            issues.append(issue)
+
+    def walk(tokens: list, line_number: int | None = None) -> None:
+        for token in tokens:
+            token_line = token.map[0] + 1 if token.map else line_number
+            token_type = token.type
+            if token_type in ("html_inline", "html_block"):
+                stripped = token.content.strip()
+                if not stripped.startswith("<!--"):
+                    tag_match = _HTML_TAG_NAME_RE.match(stripped)
+                    tag = tag_match.group(1) if tag_match else None
+                    if not (tag and tag.lower() in _SUPPORTED_INLINE_HTML_TAG_NAMES):
+                        add(token_line, f"raw HTML tag `{tag or '?'}` is not supported")
+            elif token_type == "link_open":
+                href = token.attrGet("href") or ""
+                if not is_safe_link_url(href):
+                    scheme = urllib.parse.urlsplit(href.strip()).scheme.lower()
+                    add(token_line, f"link protocol `{scheme}` is not allowed")
+            elif token_type == "image":
+                src = token.attrGet("src") or ""
+                if src.startswith(("http://", "https://")):
+                    pass
+                elif not is_safe_link_url(src):
+                    scheme = urllib.parse.urlsplit(src.strip()).scheme.lower()
+                    add(token_line, f"image protocol `{scheme}` is not allowed")
+                else:
+                    add(token_line, "local images are not supported; use an HTTPS URL")
+            elif token_type == "text":
+                # markdown-it 原生拒绝不安全协议的链接（不产生 link token），
+                # 从文本层兜底识别 [x](javascript:...) 形态
+                for scheme_match in _LINK_SCHEME_TEXT_RE.finditer(token.content):
+                    scheme = scheme_match.group(1).lower()
+                    if scheme not in _SAFE_LINK_PROTOCOLS and scheme != "":
+                        add(token_line, f"link protocol `{scheme}` is not allowed")
+                        break
+                if _ASTRAL_CHAR_RE.search(token.content):
+                    add(token_line, "emoji/supplementary-plane characters are not supported by this wiki")
+            elif token_type in ("fence", "code_block"):
+                if _ASTRAL_CHAR_RE.search(token.content):
+                    add(token_line, "emoji/supplementary-plane characters are not supported by this wiki")
+            if token_type == "inline" and token.children:
+                walk(token.children, token_line)
+
+    walk(parse_markdown(markdown_text))
+    return issues
+
+
+def conversion_error_message(issues: list[str]) -> str:
+    return "unsupported Markdown syntax would be rendered incorrectly:\n" + "\n".join(
+        f"  - {issue}" for issue in issues
+    )
 
 
 def cmd_prepare_paste_html(args: argparse.Namespace) -> int:
@@ -1411,6 +1374,9 @@ def cmd_prepare_paste_html(args: argparse.Namespace) -> int:
         return error(f"markdown file not found: {input_path}")
 
     markdown_text = read_text(input_path)
+    compatibility_issues = markdown_conversion_issues(markdown_text)
+    if compatibility_issues:
+        return error(conversion_error_message(compatibility_issues))
     issues = lint_markdown_text(markdown_text, resolve_template(args))
     if issues:
         warn_lint_issues(issues)
@@ -1515,6 +1481,9 @@ def cmd_publish_md(args: argparse.Namespace) -> int:
 
     template = resolve_template(args)
     markdown_text = read_text(input_path)
+    compatibility_issues = markdown_conversion_issues(markdown_text)
+    if compatibility_issues:
+        return error(conversion_error_message(compatibility_issues))
     issues = lint_markdown_text(markdown_text, template)
     if issues:
         warn_lint_issues(issues)
@@ -1697,3 +1666,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -212,3 +212,11 @@ python .\scripts\tianyin_wiki.py check-page --remote-url "http://wiki.timevale.c
 ```powershell
 python .\scripts\tianyin_wiki.py check-page
 ```
+
+### Markdown conversion compatibility
+
+Markdown 渲染基于 CommonMark/GFM AST 解析（`markdown-it-py`），支持 ATX/Setext 标题、`*`/`+`/`-` 无序列表、`1.` 有序列表、`**bold**`/`__bold__`/`*italic*`/`_italic_`/`~~删除线~~`、行内与围栏代码（保留语言）、引用块（含嵌套）、GFM 表格（对齐/转义竖线/无外侧竖线）、链接（嵌套括号、引用式、尖括号自动链接、邮箱、标题属性、裸 URL）、外链图片、分隔线（`---`/`***`/`___`）、硬换行、HTML 注释与白名单行内 HTML（`span` 样式、`br`、`u`、`sub`、`sup`）、任务列表（降级为字面 `[ ]`）、Mermaid 图。
+
+`prepare-paste-html` 和 `publish-md` 会在访问远程前拒绝以下构造（逐行报错并给出替代写法）：非白名单 raw HTML 标签、`javascript:` 等不安全链接协议、本地相对路径图片、该 wiki 不支持的补充平面字符（emoji 等 4 字节 UTF-8，实测入库 500）。使用 `lint-doc` 可在发布前执行同一兼容性检查。
+
+已知平台差异：Confluence 保存时会把 span 的十六进制颜色归一化为 `rgb()` 形式（比较逻辑已兼容）；有序列表的 `start` 属性会被剥离（列表始终从 1 开始）；`<u>`/`<sub>`/`<sup>` 与删除线 span 在编辑器内保留。
