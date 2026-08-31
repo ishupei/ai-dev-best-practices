@@ -242,8 +242,27 @@ def normalize_storage_for_compare(value: str) -> str:
     标点以命名实体返回（如 “ -> &ldquo;），结构化宏被注入服务端生成的
     ac:macro-id / ac:schema-version 属性。解实体并剥离注入属性后，比较结果
     只反映可见内容是否变化（实测见 docs/bugfix/bugfix_0828_*）。
+
+    标记性实体（&lt;/&gt;/&amp;/&quot;/&apos; 及数字实体）不能随整体解实体：
+    否则"转义成文本的标签"（&lt;span&gt;）会被误判为与真实标签（<span>）等价，
+    导致真实内容变更被 noChanges 短路跳过（实测见 wiki 页面 span 标注修复）。
     """
+    held: list[str] = []
+
+    def hold_markup_entity(match: re.Match) -> str:
+        held.append(match.group(0))
+        return f"\x00E{len(held) - 1}\x00"
+
+    value = re.sub(r"&(?:lt|gt|amp|quot|apos|#\d+;|#x[0-9a-fA-F]+;)", hold_markup_entity, value)
     value = html.unescape(value)
+    value = re.sub(r"\x00E(\d+)\x00", lambda m: held[int(m.group(1))], value)
+    # Confluence 保存 span 标注时会把它十六进制颜色规范化为 rgb() 形式（如
+    # color:#16a34a -> color: rgb(22,163,74);），归一化后同一内容重复推送不再误判变更
+    value = re.sub(
+        r"color: rgb\((\d+),\s*(\d+),\s*(\d+)\);?",
+        lambda m: f"color:#{int(m.group(1)):02x}{int(m.group(2)):02x}{int(m.group(3)):02x}",
+        value,
+    )
     value = re.sub(r'\s*ac:macro-id=["\'][^"\']*["\']', "", value)
     value = re.sub(r'\s*ac:schema-version=["\'][^"\']*["\']', "", value)
     return value
@@ -976,9 +995,9 @@ def cmd_merge_clear(args: argparse.Namespace) -> int:
     return 0
 
 
-# 行内暂存占位符：先整体暂存行内代码与 markdown 链接，避免裸 URL 自动链接规则
-# 把 <code>/href 内容二次包裹成链接；占位符在还原前不参与其他行内转换
-_INLINE_STASH_RE = re.compile(r"\x00S(\d+)\x00")
+# 行内转换暂存：代码/白名单 HTML 标签/markdown 链接分别用 C/T/L 占位符整体暂存，
+# 既避免裸 URL 自动链接规则二次包裹 <code>/href 内容，也避免 html.escape 把
+# <span style="color:..."> 标注色块转义成可见文本
 # 裸 URL 自动链接（不含协议相对地址与 www. 形式）；URL 字符类排除空白、HTML
 # 特殊符、引号及 CJK/全角标点（中文正文中 URL 后常紧跟中文，防止把正文吞进链接），
 # 结尾剩余的 ASCII 句读符号在链接时剥离
@@ -987,33 +1006,49 @@ _BARE_URL_RE = re.compile(
     re.IGNORECASE,
 )
 _BARE_URL_TRAILING = ".,;:!?)]"
+# 行内 HTML 标签白名单（如标注色块 span）；白名单外的其他标签一律按普通文本转义
+_INLINE_HTML_TAG_RE = re.compile(r"</?span(?:\s[^>]*)?>|</?br\s*/?>", re.IGNORECASE)
 
 
 def convert_inline(text: str) -> str:
-    text = html.escape(text, quote=False)
-    stashed: list[str] = []
+    code_spans: list[str] = []
+    html_tags: list[str] = []
+    links: list[str] = []
 
-    def stash(value: str) -> str:
-        stashed.append(value)
-        return f"\x00S{len(stashed) - 1}\x00"
+    def stash(kind: str, store: list[str], value: str) -> str:
+        store.append(value)
+        return f"\x00{kind}{len(store) - 1}\x00"
 
-    def restore(match: re.Match) -> str:
-        return stashed[int(match.group(1))]
+    def restore_kind(kind: str, store: list[str], value: str) -> str:
+        return re.sub(rf"\x00{kind}(\d+)\x00", lambda m: store[int(m.group(1))], value)
 
     def link_bare_url(match: re.Match) -> str:
         url = match.group(0).rstrip(_BARE_URL_TRAILING)
         return f'<a href="{url}">{url}</a>'
 
-    text = re.sub(r"`([^`]+)`", lambda m: stash(f"<code>{m.group(1)}</code>"), text)
+    # 行内代码最先暂存并转义内容：代码里的标签文本（如 `x <span> y`）保持文本形态，
+    # 不会在后续还原时变成真实标签
+    text = re.sub(
+        r"`([^`]+)`",
+        lambda m: stash("C", code_spans, f"<code>{html.escape(m.group(1), quote=False)}</code>"),
+        text,
+    )
+    # 白名单 HTML 标签暂存原样（先于 html.escape），避免被转义成可见文本
+    text = _INLINE_HTML_TAG_RE.sub(lambda m: stash("T", html_tags, m.group(0)), text)
+    text = html.escape(text, quote=False)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", text)
     text = re.sub(
         r"\[([^\]]+)\]\(([^)]+)\)",
-        lambda m: stash(f'<a href="{m.group(2)}">{m.group(1)}</a>'),
+        lambda m: stash("L", links, f'<a href="{m.group(2)}">{m.group(1)}</a>'),
         text,
     )
     text = _BARE_URL_RE.sub(link_bare_url, text)
-    return _INLINE_STASH_RE.sub(restore, text)
+    # 按可嵌套顺序还原：链接文本可能含标签/代码，标签属性可能含代码，代码内容在最内层
+    text = restore_kind("L", links, text)
+    text = restore_kind("T", html_tags, text)
+    text = restore_kind("C", code_spans, text)
+    return text
 
 
 def is_table_separator(line: str) -> bool:

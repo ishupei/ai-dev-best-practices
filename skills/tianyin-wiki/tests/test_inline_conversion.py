@@ -72,8 +72,65 @@ class BareUrlAutolinkTest(unittest.TestCase):
         storage = tianyin_wiki.markdown_to_storage(markdown)
         self.assertIn('<a href="https://alidocs.dingtalk.com/i/nodes/abc">https://alidocs.dingtalk.com/i/nodes/abc</a>', storage)
 
+    def test_span_annotation_preserved(self) -> None:
+        converted = tianyin_wiki.convert_inline('<span style="color:#16a34a">`fdaEnable`</span>')
+        self.assertEqual(
+            converted,
+            '<span style="color:#16a34a"><code>fdaEnable</code></span>',
+        )
+
+    def test_span_annotation_in_table_cell(self) -> None:
+        markdown = (
+            "# 标题\n\n"
+            "| 字段 | 说明 |\n"
+            "| --- | --- |\n"
+            '| <span style="color:#16a34a">`fdaReasonList`</span> | 原因列表 |\n'
+        )
+        storage = tianyin_wiki.markdown_to_storage(markdown)
+        self.assertIn(
+            '<td><p><span style="color:#16a34a"><code>fdaReasonList</code></span></p></td>',
+            storage,
+        )
+        self.assertNotIn("&lt;span", storage)
+
+    def test_html_tag_inside_code_stays_text(self) -> None:
+        converted = tianyin_wiki.convert_inline("`<span>` 是标签")
+        self.assertEqual(converted, "<code>&lt;span&gt;</code> 是标签")
+
     def test_plain_text_without_url_unchanged(self) -> None:
         self.assertEqual(tianyin_wiki.convert_inline("普通文本 `code` **加粗**"), "普通文本 <code>code</code> <strong>加粗</strong>")
+
+
+class StorageCompareTest(unittest.TestCase):
+    def test_escaped_tag_text_not_equal_to_real_tag(self) -> None:
+        old = '&lt;span style="color:#16a34a"&gt;fdaReasonList&lt;/span&gt;'
+        new = '<span style="color:#16a34a">fdaReasonList</span>'
+        self.assertNotEqual(
+            tianyin_wiki.normalize_storage_for_compare(old),
+            tianyin_wiki.normalize_storage_for_compare(new),
+        )
+
+    def test_punctuation_entities_equivalent(self) -> None:
+        self.assertEqual(
+            tianyin_wiki.normalize_storage_for_compare("说明：字段“新增”"),
+            tianyin_wiki.normalize_storage_for_compare("说明：字段&ldquo;新增&rdquo;"),
+        )
+
+    def test_span_hex_color_equivalent_to_rgb(self) -> None:
+        submitted = '<span style="color:#16a34a">绿色</span>'
+        stored = '<span style="color: rgb(22,163,74);">绿色</span>'
+        self.assertEqual(
+            tianyin_wiki.normalize_storage_for_compare(submitted),
+            tianyin_wiki.normalize_storage_for_compare(stored),
+        )
+
+    def test_macro_injected_attrs_ignored(self) -> None:
+        submitted = '<ac:structured-macro ac:name="code">'
+        stored = '<ac:structured-macro ac:name="code" ac:macro-id="abc" ac:schema-version="1">'
+        self.assertEqual(
+            tianyin_wiki.normalize_storage_for_compare(submitted),
+            tianyin_wiki.normalize_storage_for_compare(stored),
+        )
 
 
 if __name__ == "__main__":
