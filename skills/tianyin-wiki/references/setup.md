@@ -8,12 +8,12 @@
 |---|---|---|
 | Python 启动 | Python 3.9+ | 必须前置安装；Windows 上若 `python` 指向 Microsoft Store 占位程序且无输出失败，改用 `py -3`、真实 `python.exe` 路径，或 `.\scripts\tianyin_wiki.ps1` 自动选择 |
 | Markdown 解析 | `markdown-it-py`（>= 3，唯一第三方依赖，自动携带纯 Python 小包 `mdurl`） | 渲染层基于 CommonMark/GFM AST 解析，必须安装；无任何编译环节，安装即用 |
-| Mermaid 渲染 | `mmdc` 或 `npx` + Chrome/Edge | 推荐 `npm i -g @mermaid-js/mermaid-cli`；脚本按 `PATH` 自动探测 `mmdc`，没有全局 `mmdc` 时回退到 `npx --yes @mermaid-js/mermaid-cli` |
+| Mermaid 渲染 | `mmdc` 或 `npx` + Chrome/Edge | 首次安装时直接全局安装 `npm i -g @mermaid-js/mermaid-cli`；脚本按 `PATH` 自动探测 `mmdc`，没有全局 `mmdc` 时回退到 `npx --yes @mermaid-js/mermaid-cli` |
 | Mermaid 浏览器 | Chrome/Edge | 脚本会自动探测常见 Chrome/Edge 安装路径并注入 `PUPPETEER_EXECUTABLE_PATH`；未装或非标准路径时手动设置该环境变量 |
 
 ### 国内网络安装加速
 
-`markdown-it-py` 与 `mdurl` 均为纯 Python 小包（合计约 150 KB，无二进制编译）；国内直连 PyPI 较慢时使用镜像源（清华 TUNA 或阿里云），命令等效：
+`markdown-it-py` 与 `mdurl` 均为纯 Python 小包（合计约 150 KB，无二进制编译）；国内网络直连 PyPI 缓慢或失败时使用镜像源（清华 TUNA 或阿里云），命令等效：
 
 ```powershell
 pip install markdown-it-py -i https://pypi.tuna.tsinghua.edu.cn/simple
@@ -22,19 +22,19 @@ pip install markdown-it-py -i https://mirrors.aliyun.com/pypi/simple/
 
 技能不自动切换 pip 源，也不内置/打包任何第三方代码（避免版本漂移与安全风险）；CLI 在缺少依赖时会直接给出上述安装命令。
 
-Windows 推荐通过启动器执行，它会跳过 Microsoft Store 占位程序；若未发现 Python 3.9+，会直接要求先安装：
+Windows 统一通过启动器执行，它会跳过 Microsoft Store 占位程序；若未发现 Python 3.9+，会直接要求先安装：
 
 ```powershell
 .\scripts\tianyin_wiki.ps1 doctor --input .\outputs\detail-design.md
 ```
 
-新机器建议先执行一次环境诊断，确认 Python、Mermaid CLI、浏览器路径和文档中的 Mermaid 数量：
+新机器首次使用前先执行一次环境诊断，确认 Python、Mermaid CLI、浏览器路径和文档中的 Mermaid 数量：
 
 ```powershell
 python .\scripts\tianyin_wiki.py doctor --input .\outputs\detail-design.md
 ```
 
-若 `doctor` 显示 `viaNpx: true`，每次渲染都会多付出 npx 启动开销（实测每张图约 1.3 秒）。**首次安装时建议直接全局装好 `mmdc`**，一次投入持续加速：复用本机 Chrome/Edge 跳过 Chromium 下载，国内网络走 npmmirror 镜像：
+若 `doctor` 显示 `viaNpx: true`，每次渲染都会多付出 npx 启动开销（每张图约 1.3 秒）。**首次安装时直接全局装好 `mmdc`**，一次投入持续加速：复用本机 Chrome/Edge 跳过 Chromium 下载，国内网络走 npmmirror 镜像：
 
 ```powershell
 set PUPPETEER_SKIP_DOWNLOAD=true

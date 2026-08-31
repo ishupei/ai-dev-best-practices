@@ -2,7 +2,7 @@
 
 ## REST 发布
 
-发布前建议执行 `lint-doc` 自查，再使用 `publish-md`（结构校验差异仅提示，不阻断发布）。Mermaid 统一作为高分辨率 PNG 附件上传，默认缩放值为 `3`。
+发布前先执行 `lint-doc` 自查，再使用 `publish-md`（结构校验差异仅提示，不阻断发布）。Mermaid 统一作为高分辨率 PNG 附件上传，默认缩放值为 `3`。
 
 ```powershell
 python .\scripts\tianyin_wiki.py lint-doc --input .\outputs\detail-design.md

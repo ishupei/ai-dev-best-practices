@@ -9,19 +9,19 @@ description: 生成/更新天印基线或 1-N 详设 Markdown；也可在用户�
 
 ## 路由
 
-- 已给本地 Markdown 并要求推送/发布/同步 Wiki：走 `publish-md` raw 直推；发布前可 `--dry-run`。
+- 已给本地 Markdown 并要求推送/发布/同步 Wiki：走 `publish-md` raw 直推；发布前先 `--dry-run` 预检（只读）。
 - 要生成详设：先确认 `baseline` 还是 `1-n`，再 `init-template` → 填充 → `lint-doc`。
 - 只读确认远程页：用 `check-page`。
-- 新机器或 Mermaid 慢：用 `doctor`；工具路径缓存异常时加 `--refresh-runtime`。
+- 新机器或 Mermaid 渲染异常/缓慢：用 `doctor` 诊断；工具路径缓存异常时加 `--refresh-runtime`。
 
 ## 常用命令（免查参考文档）
 
-`<wiki-url>` 形如 `http://wiki.timevale.cn:8081/pages/viewpage.action?pageId=<id>`；本机已配置 `baseUrl`/`pageId`/凭据时省略 `--remote-url`。Windows 可用 `.\scripts\tianyin_wiki.ps1` 代替 `python .\scripts\tianyin_wiki.py`。
+`<wiki-url>` 形如 `http://wiki.timevale.cn:8081/pages/viewpage.action?pageId=<id>`；本机已配置 `baseUrl`/`pageId`/凭据时省略 `--remote-url`。Windows 下用 `.\scripts\tianyin_wiki.ps1` 代替 `python .\scripts\tianyin_wiki.py`。
 
 ```powershell
 # 发布预检（只读，不传附件不更新页面）
 python .\scripts\tianyin_wiki.py publish-md --dry-run --input <md> --remote-url "<wiki-url>"
-# 正式发布（raw 默认不校验结构；发布前建议先 lint-doc）
+# 正式发布（raw 默认不校验结构；发布前先 lint-doc）
 python .\scripts\tianyin_wiki.py publish-md --input <md> --remote-url "<wiki-url>"
 # 只读检查目标页面
 python .\scripts\tianyin_wiki.py check-page --remote-url "<wiki-url>"
