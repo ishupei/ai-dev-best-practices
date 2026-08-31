@@ -247,25 +247,18 @@ def normalize_storage_for_compare(value: str) -> str:
     否则"转义成文本的标签"（&lt;span&gt;）会被误判为与真实标签（<span>）等价，
     导致真实内容变更被 noChanges 短路跳过（实测见 wiki 页面 span 标注修复）。
     """
-    held: list[str] = []
-
-    def hold_markup_entity(match: re.Match) -> str:
-        held.append(match.group(0))
-        return f"\x00E{len(held) - 1}\x00"
-
-    value = re.sub(r"&(?:lt|gt|amp|quot|apos|#\d+;|#x[0-9a-fA-F]+;)", hold_markup_entity, value)
+    placeholders = _InlinePlaceholders()
+    value = _MARKUP_ENTITY_RE.sub(lambda m: placeholders.stash("E", m.group(0)), value)
     value = html.unescape(value)
-    value = re.sub(r"\x00E(\d+)\x00", lambda m: held[int(m.group(1))], value)
     # Confluence 保存 span 标注时会把它十六进制颜色规范化为 rgb() 形式（如
     # color:#16a34a -> color: rgb(22,163,74);），归一化后同一内容重复推送不再误判变更
-    value = re.sub(
-        r"color: rgb\((\d+),\s*(\d+),\s*(\d+)\);?",
+    value = _RGB_COLOR_RE.sub(
         lambda m: f"color:#{int(m.group(1)):02x}{int(m.group(2)):02x}{int(m.group(3)):02x}",
         value,
     )
     value = re.sub(r'\s*ac:macro-id=["\'][^"\']*["\']', "", value)
     value = re.sub(r'\s*ac:schema-version=["\'][^"\']*["\']', "", value)
-    return value
+    return placeholders.restore(value)
 
 
 def strip_html_comments(markdown_text: str) -> str:
@@ -995,9 +988,6 @@ def cmd_merge_clear(args: argparse.Namespace) -> int:
     return 0
 
 
-# 行内转换暂存：代码/白名单 HTML 标签/markdown 链接分别用 C/T/L 占位符整体暂存，
-# 既避免裸 URL 自动链接规则二次包裹 <code>/href 内容，也避免 html.escape 把
-# <span style="color:..."> 标注色块转义成可见文本
 # 裸 URL 自动链接（不含协议相对地址与 www. 形式）；URL 字符类排除空白、HTML
 # 特殊符、引号及 CJK/全角标点（中文正文中 URL 后常紧跟中文，防止把正文吞进链接），
 # 结尾剩余的 ASCII 句读符号在链接时剥离
@@ -1011,71 +1001,104 @@ _INLINE_HTML_TAG_RE = re.compile(
     r"</?span(?:\s[^>]*)?>|</?br\s*/?>|</?u>|</?sub>|</?sup>",
     re.IGNORECASE,
 )
+# 行内转换的其余正则统一提升为模块级常量，与 _BARE_URL_RE 风格一致
+_CODE_SPAN_RE = re.compile(r"`([^`]+)`")
+_INLINE_COMMENT_RE = re.compile(r"<!--.*?-->")
+# 尖括号自动链接带 (?<!\() 前缀：`[x](<url>)` 里的尖括号形式交给 _MD_LINK_RE 处理，
+# 避免自动链接先吞掉链接目标
+_ANGLE_AUTOLINK_RE = re.compile(r"(?<!\()<https?://[^>\s]+>")
+_BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
+_ITALIC_RE = re.compile(r"\*([^*]+)\*")
+_STRIKE_RE = re.compile(r"~~([^~]+)~~")
+_IMAGE_RE = re.compile(r"!\[([^\]]+)\]\(([^)]+)\)")
+# 链接目标 <url> 包裹形式（CommonMark）在转义前剥离尖括号，避免转义后 &lt; &gt; 污染 href
+_MD_LINK_ANGLE_RE = re.compile(r"\[([^\]]+)\]\(<([^>]+)>\)")
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+_LIST_ITEM_RE = re.compile(r"^\s*(\d+\.|-)\s+")
+# 标记性实体（&lt;/&gt; 等）在比较归一化时保持原样，避免"转义文本"与"真实标签"误判等价
+_MARKUP_ENTITY_RE = re.compile(r"&(?:lt|gt|amp|quot|apos|#\d+;|#x[0-9a-fA-F]+;)")
+# Confluence 保存 span 标注时把十六进制颜色规范化为 rgb() 形式，比较时归一化回 hex
+_RGB_COLOR_RE = re.compile(r"color: rgb\((\d+),\s*(\d+),\s*(\d+)\);?")
 
 
-def convert_inline(text: str) -> str:
-    code_spans: list[str] = []
-    html_tags: list[str] = []
-    links: list[str] = []
+class _InlinePlaceholders:
+    """行内转换占位符暂存器。
 
-    def stash(kind: str, store: list[str], value: str) -> str:
+    stash 把待还原片段暂存并以 \\x00<kind><n>\\x00 占位；restore 迭代还原直到无残留，
+    因此支持任意嵌套（如链接文本内再含链接 token 时自动先外后内展开，索引单调递增
+    保证必然终止）。kind 区分用途：C=行内代码、T=白名单 HTML 标签、L=链接/图片宏、
+    E=比较归一化暂存实体。
+    """
+
+    def __init__(self) -> None:
+        self._stores: dict[str, list[str]] = {}
+
+    def stash(self, kind: str, value: str) -> str:
+        store = self._stores.setdefault(kind, [])
         store.append(value)
         return f"\x00{kind}{len(store) - 1}\x00"
 
-    def restore_kind(kind: str, store: list[str], value: str) -> str:
-        return re.sub(rf"\x00{kind}(\d+)\x00", lambda m: store[int(m.group(1))], value)
+    def restore(self, value: str) -> str:
+        patterns = {kind: re.compile(rf"\x00{kind}(\d+)\x00") for kind in self._stores}
+        while True:
+            replaced = 0
+            for kind, pattern in patterns.items():
+                value, count = pattern.subn(lambda m: self._stores[kind][int(m.group(1))], value)
+                replaced += count
+            if not replaced:
+                return value
+
+
+def escape_attr_value(value: str) -> str:
+    """补齐双引号转义，用于把已做 &<> 转义的文本拼进双引号包裹的 HTML 属性。"""
+    return value.replace('"', "&quot;")
+
+
+def convert_inline(text: str) -> str:
+    placeholders = _InlinePlaceholders()
 
     def link_bare_url(match: re.Match) -> str:
         url = match.group(0).rstrip(_BARE_URL_TRAILING)
-        return f'<a href="{url}">{url}</a>'
+        return f'<a href="{escape_attr_value(url)}">{url}</a>'
+
+    def convert_autolink(match: re.Match) -> str:
+        url = html.escape(match.group(0)[1:-1], quote=False)
+        return placeholders.stash("L", f'<a href="{escape_attr_value(url)}">{url}</a>')
 
     def convert_image(match: re.Match) -> str:
         alt, url = match.group(1), match.group(2)
         if re.match(r"https?://", url, re.IGNORECASE):
             # 外链图片转 Confluence 图片宏；本地相对路径无附件上传能力，回退为链接
-            return stash("L", links, f'<ac:image><ri:url ri:value="{url}"/></ac:image>')
-        return stash("L", links, f'<a href="{url}">{alt}</a>')
+            return placeholders.stash("L", f'<ac:image><ri:url ri:value="{escape_attr_value(url)}"/></ac:image>')
+        return placeholders.stash("L", f'<a href="{escape_attr_value(url)}">{alt}</a>')
 
     # 行内代码最先暂存并转义内容：代码里的标签文本（如 `x <span> y`）保持文本形态，
     # 不会在后续还原时变成真实标签
-    text = re.sub(
-        r"`([^`]+)`",
-        lambda m: stash("C", code_spans, f"<code>{html.escape(m.group(1), quote=False)}</code>"),
+    text = _CODE_SPAN_RE.sub(
+        lambda m: placeholders.stash("C", f"<code>{html.escape(m.group(1), quote=False)}</code>"),
         text,
     )
     # 行内 HTML 注释直接剥离（整行注释已在 strip_html_comments 处理）
-    text = re.sub(r"<!--.*?-->", "", text)
-    # 尖括号自动链接 <https://...>：先于 html.escape 处理，否则 &gt; 实体字符会污染 URL；
-    # 暂存时显式转义 URL（此时正文尚未转义）
-    text = re.sub(
-        r"<https?://[^>\s]+>",
-        lambda m: stash(
-            "L",
-            links,
-            f'<a href="{html.escape(m.group(0)[1:-1], quote=False)}">{html.escape(m.group(0)[1:-1], quote=False)}</a>',
-        ),
-        text,
-    )
+    text = _INLINE_COMMENT_RE.sub("", text)
+    # [x](<url>) 形式先剥离尖括号（先于自动链接与 html.escape，防止 href 被 &lt; 污染）
+    text = _MD_LINK_ANGLE_RE.sub(r"[\1](\2)", text)
+    # 尖括号自动链接 <https://...>：先于 html.escape 处理，否则 &gt; 实体字符会污染 URL
+    text = _ANGLE_AUTOLINK_RE.sub(convert_autolink, text)
     # 白名单 HTML 标签暂存原样（先于 html.escape），避免被转义成可见文本
-    text = _INLINE_HTML_TAG_RE.sub(lambda m: stash("T", html_tags, m.group(0)), text)
+    text = _INLINE_HTML_TAG_RE.sub(lambda m: placeholders.stash("T", m.group(0)), text)
     text = html.escape(text, quote=False)
-    text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
-    text = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", text)
+    text = _BOLD_RE.sub(r"<strong>\1</strong>", text)
+    text = _ITALIC_RE.sub(r"<em>\1</em>", text)
     # 删除线：Confluence 编辑器对删除线的存储表达是 line-through 的 span
-    text = re.sub(r"~~([^~]+)~~", r'<span style="text-decoration: line-through;">\1</span>', text)
+    text = _STRIKE_RE.sub(r'<span style="text-decoration: line-through;">\1</span>', text)
     # 图片语法必须先于链接处理，否则 ![alt](url) 会被链接规则匹配成带 ! 前缀的链接
-    text = re.sub(r"!\[([^\]]+)\]\(([^)]+)\)", convert_image, text)
-    text = re.sub(
-        r"\[([^\]]+)\]\(([^)]+)\)",
-        lambda m: stash("L", links, f'<a href="{m.group(2)}">{m.group(1)}</a>'),
+    text = _IMAGE_RE.sub(convert_image, text)
+    text = _MD_LINK_RE.sub(
+        lambda m: placeholders.stash("L", f'<a href="{escape_attr_value(m.group(2))}">{m.group(1)}</a>'),
         text,
     )
     text = _BARE_URL_RE.sub(link_bare_url, text)
-    # 按可嵌套顺序还原：链接文本可能含标签/代码，标签属性可能含代码，代码内容在最内层
-    text = restore_kind("L", links, text)
-    text = restore_kind("T", html_tags, text)
-    text = restore_kind("C", code_spans, text)
-    return text
+    return placeholders.restore(text)
 
 
 def is_table_separator(line: str) -> bool:
@@ -1100,10 +1123,10 @@ def split_table_row(line: str) -> list[str]:
     return cells
 
 
-def parse_table_alignments(separator_line: str) -> list[str | None]:
-    """从分隔行（| --- | :---: | ---: |）解析每列对齐：None=默认，left/center/right。"""
+def parse_table_alignments(separator_cells: list[str]) -> list[str | None]:
+    """从分隔行单元格（:--- / :---: / ---:）解析每列对齐：None=默认，left/center/right。"""
     aligns: list[str | None] = []
-    for cell in split_table_row(separator_line):
+    for cell in separator_cells:
         cell = cell.strip()
         if cell.startswith(":") and cell.endswith(":") and len(cell) >= 2:
             aligns.append("center")
@@ -1123,10 +1146,13 @@ def render_table(lines: list[str]) -> str:
     header = rows[0]
     aligns: list[str | None] = []
     if len(lines) > 1 and is_table_separator(lines[1]):
-        aligns = parse_table_alignments(lines[1])
+        # rows[1] 即分隔行已分割结果，无需二次分割
+        aligns = parse_table_alignments(rows[1])
         body = rows[2:]
     else:
         body = rows[1:]
+    # 分隔行列数可能少于表头（手写表格常见），不足列按默认对齐补齐，避免下标越界
+    aligns = aligns + [None] * (len(header) - len(aligns))
 
     def cell(tag: str, content: str, align: str | None) -> str:
         style = f' style="text-align: {align};"' if align else ""
@@ -1191,9 +1217,11 @@ def render_list(lines: list[str]) -> str:
     for raw in lines:
         indent = len(raw) - len(raw.lstrip(" "))
         level = indent // 2
-        ordered = bool(re.match(r"^\s*\d+\.\s+", raw))
+        # 标记解析只做一次：既判类型又定位内容起点
+        marker = _LIST_ITEM_RE.match(raw)
+        ordered = bool(marker and marker.group(1) != "-")
         tag = "ol" if ordered else "ul"
-        content = re.sub(r"^\s*(?:-|\d+\.)\s+", "", raw.strip(), count=1)
+        content = raw[marker.end() :].strip() if marker else raw.strip()
 
         while stack and stack[-1] > level:
             html_parts.append("</li></" + tags.pop() + ">")
@@ -1342,10 +1370,10 @@ def markdown_to_html_blocks(
                 i += 1
             blocks.append(render_table(table_lines))
             continue
-        if re.match(r"^\s*(?:-|\d+\.)\s+", lines[i]):
+        if _LIST_ITEM_RE.match(lines[i]):
             list_lines = [lines[i]]
             i += 1
-            while i < len(lines) and (not lines[i].strip() or re.match(r"^\s*(?:-|\d+\.)\s+", lines[i])):
+            while i < len(lines) and (not lines[i].strip() or _LIST_ITEM_RE.match(lines[i])):
                 if lines[i].strip():
                     list_lines.append(lines[i])
                 i += 1
@@ -1355,7 +1383,7 @@ def markdown_to_html_blocks(
         i += 1
         while i < len(lines):
             candidate = lines[i].strip()
-            if not candidate or candidate.startswith("#") or candidate.startswith("|") or candidate == "---" or candidate.startswith("```") or re.match(r"^\s*(?:-|\d+\.)\s+", lines[i]):
+            if not candidate or candidate.startswith("#") or candidate.startswith("|") or candidate == "---" or candidate.startswith("```") or _LIST_ITEM_RE.match(lines[i]):
                 break
             paragraph_lines.append(candidate)
             i += 1
@@ -1416,6 +1444,70 @@ def cmd_upload_attachment(args: argparse.Namespace) -> int:
     return 0
 
 
+@dataclass
+class _PageUpdate:
+    """页面更新结果：response 为 PUT 响应，None 表示内容等价未更新。"""
+    response: dict | None
+    page: dict
+    title: str
+
+
+def _sync_mermaid_attachments(config: RuntimeConfig, diagrams: list[RenderedMermaid]) -> set[str]:
+    """上传页面缺失的同名 Mermaid 附件；并发下重复上传按 HTTP 400 幂等跳过。"""
+    if not diagrams:
+        return set()
+    existing_attachment_titles = fetch_attachment_titles(config)
+    uploaded_filenames: set[str] = set()
+    for diagram in diagrams:
+        filename = diagram.attachment_filename
+        if filename in existing_attachment_titles or filename in uploaded_filenames:
+            continue
+        try:
+            upload_attachment(config, diagram.image_path)
+        except RuntimeError as exc:
+            if not is_duplicate_attachment_error(exc):
+                raise
+            refreshed_titles = fetch_attachment_titles(config)
+            if filename not in refreshed_titles:
+                raise
+            existing_attachment_titles.update(refreshed_titles)
+            continue
+        uploaded_filenames.add(filename)
+    return uploaded_filenames
+
+
+def _update_page(
+    config: RuntimeConfig,
+    page: dict,
+    requested_title: str | None,
+    storage_html: str,
+) -> _PageUpdate:
+    """并发安全更新页面：重读最新版本；内容等价时短路不 bump 版本；409 冲突重试一次。"""
+    for attempt in range(2):
+        fresh = fetch_page(config)
+        title = requested_title or fresh["title"]
+        next_version = int(fresh["version"]["number"]) + 1
+        current_storage = (fresh.get("body", {}).get("storage") or {}).get("value") or ""
+        if title == fresh.get("title") and normalize_storage_for_compare(storage_html) == normalize_storage_for_compare(current_storage):
+            return _PageUpdate(response=None, page=fresh, title=title)
+        endpoint = f"{config.base_url.rstrip('/')}/rest/api/content/{config.page_id}"
+        payload = {
+            "id": fresh["id"],
+            "type": fresh["type"],
+            "title": title,
+            "version": {"number": next_version},
+            "body": {"storage": {"value": storage_html, "representation": "storage"}},
+        }
+        if fresh.get("space", {}).get("key"):
+            payload["space"] = {"key": fresh["space"]["key"]}
+        try:
+            return _PageUpdate(response=request_json("PUT", endpoint, config.headers, payload), page=fresh, title=title)
+        except RuntimeError as exc:
+            if attempt == 1 or not is_page_version_conflict(exc):
+                raise
+    raise AssertionError("unreachable")
+
+
 def cmd_publish_md(args: argparse.Namespace) -> int:
     input_path = Path(args.input).resolve()
     if not input_path.exists():
@@ -1473,71 +1565,26 @@ def cmd_publish_md(args: argparse.Namespace) -> int:
                     "storageLength": len(storage_html),
                 }, ensure_ascii=False))
                 return 0
-            # 页面已有同名附件（文件名包含源码摘要与 PNG 缩放值）自动跳过上传，仅传新增图。
-            existing_attachment_titles: set[str] = set()
-            if diagrams:
-                existing_attachment_titles = fetch_attachment_titles(config)
-            uploaded_filenames: set[str] = set()
-            for diagram in diagrams:
-                filename = diagram.attachment_filename
-                if filename in existing_attachment_titles or filename in uploaded_filenames:
-                    continue
-                try:
-                    upload_attachment(config, diagram.image_path)
-                except RuntimeError as exc:
-                    if not is_duplicate_attachment_error(exc):
-                        raise
-                    refreshed_titles = fetch_attachment_titles(config)
-                    if filename not in refreshed_titles:
-                        raise
-                    existing_attachment_titles.update(refreshed_titles)
-                    continue
-                uploaded_filenames.add(filename)
-
-            # 并发发布时页面版本可能已变化：重读页面并在 409 时最多重试一次。
-            # 若其他发布者已写入相同正文，直接返回 noChanges，不再空更新版本。
-            for attempt in range(2):
-                page = fetch_page(config)
-                title = requested_title or page["title"]
-                next_version = int(page["version"]["number"]) + 1
-                current_storage = (page.get("body", {}).get("storage") or {}).get("value") or ""
-                if (
-                    title == page.get("title")
-                    and normalize_storage_for_compare(storage_html) == normalize_storage_for_compare(current_storage)
-                ):
-                    print(json.dumps({
-                        "noChanges": True,
-                        "id": page["id"],
-                        "title": title,
-                        "version": page["version"]["number"],
-                        "template": template,
-                        "mermaidAttachments": len({d.attachment_filename for d in diagrams}),
-                        "uploadedAttachments": len(uploaded_filenames),
-                    }, ensure_ascii=False))
-                    return 0
-                endpoint = f"{config.base_url.rstrip('/')}/rest/api/content/{config.page_id}"
-                payload = {
-                    "id": page["id"],
-                    "type": page["type"],
-                    "title": title,
-                    "version": {"number": next_version},
-                    "body": {"storage": {"value": storage_html, "representation": "storage"}},
-                }
-                if page.get("space", {}).get("key"):
-                    payload["space"] = {"key": page["space"]["key"]}
-                try:
-                    response = request_json("PUT", endpoint, config.headers, payload)
-                    break
-                except RuntimeError as exc:
-                    if attempt == 1 or not is_page_version_conflict(exc):
-                        raise
+            uploaded_filenames = _sync_mermaid_attachments(config, diagrams)
+            update = _update_page(config, page, requested_title, storage_html)
     except Exception as exc:
         return error(str(exc))
 
+    if update.response is None:
+        print(json.dumps({
+            "noChanges": True,
+            "id": update.page["id"],
+            "title": update.title,
+            "version": update.page["version"]["number"],
+            "template": template,
+            "mermaidAttachments": len({d.attachment_filename for d in diagrams}),
+            "uploadedAttachments": len(uploaded_filenames),
+        }, ensure_ascii=False))
+        return 0
     print(json.dumps({
-        "id": response["id"],
-        "title": response["title"],
-        "version": response["version"]["number"],
+        "id": update.response["id"],
+        "title": update.response["title"],
+        "version": update.response["version"]["number"],
         "template": template,
         "mermaidAttachments": len({d.attachment_filename for d in diagrams}),
         "uploadedAttachments": len(uploaded_filenames),
