@@ -1,0 +1,21 @@
+skills/tianyin-wiki/agents/openai.yaml
+  s_d91a9f03f2fae2::t_47d0ceccd351b9 4
+skills/tianyin-wiki/SKILL.md
+  s_d91a9f03f2fae2::t_47d0ceccd351b9 3,8,10,12,14-18,20,22,24-28,30,32-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f14c490c7827d3a21e814a2c47ff27dc4d8baa12",
+  "prompts": {},
+  "sessions": {
+    "s_d91a9f03f2fae2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a055c0-6a48-7052-926d-ed65fedc8075",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
