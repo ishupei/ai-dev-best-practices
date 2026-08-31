@@ -45,7 +45,7 @@ python .\scripts\tianyin_wiki.py init-template --template 1-n --output .\outputs
 - `baseline`：基线详设模板，需显式指定。
 - `1-n`：1-N 详设模板，来源页面 `pageId=224905569`，需显式指定。
 - `default`：生成详设流程的缺省模板，等同 `baseline`；仅在「上下文未指定文档、需生成天印本地 md 再推送」的场景使用。
-- 未显式传 `--template` 时，先取配置文件 `template` 字段（仅 `baseline`/`1-n`），再缺省 `raw`（见「默认配置」）。
+- 未显式传 `--template` 时的取值顺序见「默认配置」。
 
 ### `publish-md`
 
@@ -102,13 +102,7 @@ python .\scripts\tianyin_wiki.py publish-md --dry-run --input .\outputs\detail-d
 
 代码块默认使用 Emacs 主题（`<ac:parameter ac:name="theme">Emacs</ac:parameter>`），无需显式配置。
 
-附件文件名规范化：`tianyin-mermaid-{摘要}-png-{缩放}-{背景}.png`（如 `tianyin-mermaid-ef44adf787cc2f26-png-3-white.png`），本地缓存键同构（省略 `tianyin-mermaid-` 前缀）；`摘要` 为图表源码 sha256 前 16 位，`缩放` 为 `--mermaid-scale` 值，`背景` 固定为白底。任一渲染参数变化即生成新文件名并上传，不会复用旧参数图片。
-
-Mermaid 图表统一发布为高分辨率**白底** PNG，默认缩放值为 `3`；可通过 `--mermaid-scale` 调整：
-
-```powershell
-python .\scripts\tianyin_wiki.py publish-md --input .\outputs\detail-design.md --remote-url "http://wiki.timevale.cn:8081/pages/viewpage.action?pageId=123456" --mermaid-scale 3
-```
+附件文件名：`tianyin-mermaid-{摘要}-png-{缩放}-{背景}.png`，`摘要` 为源码 sha256 前 16 位，`缩放` 为 `--mermaid-scale` 值，`背景` 固定白底；本地缓存键同构（省略前缀），参数变化即新文件名。
 
 Mermaid 渲染按 `PATH` 探测 `mmdc`（`npm i -g @mermaid-js/mermaid-cli`）或 `npx`，无需配置。
 
@@ -146,7 +140,7 @@ python .\scripts\tianyin_wiki.py lint-doc --input .\outputs\detail-design.md
 
 所有章节均为非必填：章节下标注「未涉及/不涉及」时，自动豁免该章节（含其子章节）的子标题与表头校验，例如接口详情仅填写「未涉及」时不要求请求/响应参数表。章节填写指引以模板内 `<!-- ... -->` 注释为唯一指引源（`references/templates/`），本文档仅为摘要。
 
-模板文档必须以一级标题（主标题）开头（本地保留、推送剔除），缺少时 lint 报错；主标题不参与「多余一级章节」校验。基线模板章节为一级标题（`# 1.方案背景`），1-N 保持二级（`## 一、`）。
+模板文档必须以一级标题（主标题）开头，缺少时 lint 报错；主标题不参与「多余一级章节」校验（主标题约定见 `publish-md`）。基线模板章节为一级标题（`# 1.方案背景`），1-N 保持二级（`## 一、`）。
 
 `lint-doc` 未传 `--template` 时取配置文件 `template` 字段（`baseline`/`1-n`）按模板校验；配置文件未设置时才为 `raw` 模式（不校验任何格式，恒输出 `OK`）。按模板校验需显式 `--template baseline|1-n`（或配置文件已设置）。
 

@@ -6,9 +6,9 @@
 
 | 用途 | 依赖 | 安装/探测方式 |
 |---|---|---|
-| Python 启动 | Python 3.9+ | 必须前置安装；Windows 上若 `python` 指向 Microsoft Store 占位程序且无输出失败，改用 `py -3`、真实 `python.exe` 路径，或 `.\scripts\tianyin_wiki.ps1` 自动选择 |
+| Python 启动 | Python 3.9+ | 必须前置安装；Windows 用 `.\scripts\tianyin_wiki.ps1` 启动器自动选择（见下） |
 | Markdown 解析 | `markdown-it-py`（>= 3，唯一第三方依赖，自动携带纯 Python 小包 `mdurl`） | 渲染层基于 CommonMark/GFM AST 解析，必须安装；无任何编译环节，安装即用 |
-| Mermaid 渲染 | `mmdc` 或 `npx` + Chrome/Edge | 首次安装时直接全局安装 `npm i -g @mermaid-js/mermaid-cli`；脚本按 `PATH` 自动探测 `mmdc`，没有全局 `mmdc` 时回退到 `npx --yes @mermaid-js/mermaid-cli` |
+| Mermaid 渲染 | `mmdc` 或 `npx` + Chrome/Edge | 首次安装时直接全局装好 `mmdc`（命令见下）；脚本按 `PATH` 自动探测 `mmdc`，缺失时回退 `npx --yes @mermaid-js/mermaid-cli` |
 | Mermaid 浏览器 | Chrome/Edge | 脚本会自动探测常见 Chrome/Edge 安装路径并注入 `PUPPETEER_EXECUTABLE_PATH`；未装或非标准路径时手动设置该环境变量 |
 
 ### 国内网络安装加速
@@ -28,11 +28,7 @@ Windows 统一通过启动器执行，它会跳过 Microsoft Store 占位程序�
 .\scripts\tianyin_wiki.ps1 doctor --input .\outputs\detail-design.md
 ```
 
-新机器首次使用前先执行一次环境诊断，确认 Python、Mermaid CLI、浏览器路径和文档中的 Mermaid 数量：
-
-```powershell
-python .\scripts\tianyin_wiki.py doctor --input .\outputs\detail-design.md
-```
+新机器首次使用前先执行一次环境诊断（`doctor --input <md>`），确认 Python、Mermaid CLI、浏览器路径和文档中的 Mermaid 数量。
 
 若 `doctor` 显示 `viaNpx: true`，每次渲染都会多付出 npx 启动开销。**首次安装时直接全局装好 `mmdc`**，一次投入持续加速：复用本机 Chrome/Edge 跳过 Chromium 下载，国内网络走 npmmirror 镜像：
 

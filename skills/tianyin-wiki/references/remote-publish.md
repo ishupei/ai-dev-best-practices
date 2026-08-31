@@ -23,4 +23,4 @@ python .\scripts\tianyin_wiki.py publish-md --input .\outputs\detail-design.md -
 python .\scripts\tianyin_wiki.py check-page --remote-url "<wiki-url>"
 ```
 
-首次使用或配置文件未提供 `username`/`password` 时，先要求用户补充 `%USERPROFILE%\.config\tianyin-wiki\config.json`、命令行参数或环境变量；不要在输出、日志或文档中回显认证信息。
+首次使用或配置文件未提供 `username`/`password` 时，先补齐（配置文件/命令行参数/环境变量），不回显认证信息；配置方式见 `setup.md`。
