@@ -1,0 +1,14 @@
+.gitignore
+  h_c93c98e603be80 35-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "47803e1ab5df51f35b6d6f49f4fc483833ed649e",
+  "prompts": {},
+  "humans": {
+    "h_c93c98e603be80": {
+      "author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
