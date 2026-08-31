@@ -279,7 +279,7 @@ _CODE_LANGUAGE_WHITELIST = frozenset({
     "csharp", "css", "coldfusion", "cuda", "d", "delphi", "diff", "dockerfile",
     "dylan", "eiffel", "email", "erlang", "fortran", "freebasic", "genero",
     "gherkin", "glsl", "groovy", "haskell", "html", "idl", "ini", "inno",
-    "java", "java5", "javascript", "json", "jsp", "julia", "kotlin", "latex",
+    "java", "java5", "javascript", "jsp", "julia", "kotlin", "latex",
     "lisp", "lua", "make", "markdown", "matlab", "mirc", "mxml", "mysql",
     "nsis", "objc", "ocaml", "ocaml-brief", "oobas", "oracle11", "oracle8",
     "pascal", "perl", "php", "plsql", "powershell", "prolog", "properties",
