@@ -1,0 +1,21 @@
+skills/tianyin-wiki/references/cli-reference.md
+  s_d91a9f03f2fae2::t_501d6e40b0eb59 220
+skills/tianyin-wiki/scripts/tianyin_wiki.py
+  s_d91a9f03f2fae2::t_501d6e40b0eb59 256-263,266-267,1098-1151,1155-1186,1445-1446
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a08de040ca8225ce0b87f625fee9570a707e7ffc",
+  "prompts": {},
+  "sessions": {
+    "s_d91a9f03f2fae2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a055c0-6a48-7052-926d-ed65fedc8075",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
