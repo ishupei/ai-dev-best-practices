@@ -508,6 +508,14 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "refreshRuntime": bool(args.refresh_runtime),
     }
     try:
+        from markdown_it import MarkdownIt  # noqa: F401
+        result["markdownParser"] = {"available": True}
+    except ImportError:
+        result["markdownParser"] = {
+            "available": False,
+            "install": "pip install markdown-it-py -i https://pypi.tuna.tsinghua.edu.cn/simple",
+        }
+    try:
         command = resolve_mermaid_command(refresh_cache=args.refresh_runtime)
         result["mermaidRenderer"] = {
             "available": True,
@@ -600,7 +608,9 @@ def build_markdown_parser():
         from markdown_it import MarkdownIt
     except ImportError as exc:
         raise RuntimeError(
-            "missing dependency: install markdown-it-py (pip install markdown-it-py)"
+            "missing dependency: install markdown-it-py "
+            "(pip install markdown-it-py; 国内镜像: pip install markdown-it-py "
+            "-i https://pypi.tuna.tsinghua.edu.cn/simple)"
         ) from exc
     md = MarkdownIt("commonmark", {"html": True})
     md.enable("table")
