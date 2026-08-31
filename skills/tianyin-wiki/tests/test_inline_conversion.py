@@ -133,5 +133,68 @@ class StorageCompareTest(unittest.TestCase):
         )
 
 
+class BlockRenderingTest(unittest.TestCase):
+    def test_external_image_becomes_image_macro(self) -> None:
+        converted = tianyin_wiki.convert_inline(
+            "![image.png](https://alidocs.oss-cn-zhangjiakou.aliyuncs.com/res/eYV)"
+        )
+        self.assertEqual(
+            converted,
+            '<ac:image><ri:url ri:value="https://alidocs.oss-cn-zhangjiakou.aliyuncs.com/res/eYV"/></ac:image>',
+        )
+
+    def test_relative_image_falls_back_to_link(self) -> None:
+        converted = tianyin_wiki.convert_inline("![图](./images/a.png)")
+        self.assertEqual(converted, '<a href="./images/a.png">图</a>')
+
+    def test_blockquote_rendering(self) -> None:
+        markdown = (
+            "# 标题\n\n"
+            "> 复用关联需求单 [20888](https://x/y?id=1) 已冻结\n"
+            "> 第二行继续\n\n"
+            "普通段落\n"
+        )
+        storage = tianyin_wiki.markdown_to_storage(markdown)
+        self.assertEqual(
+            storage,
+            '<blockquote><p>复用关联需求单 <a href="https://x/y?id=1">20888</a> 已冻结 第二行继续</p></blockquote><p>普通段落</p>',
+        )
+
+    def test_table_cell_code_with_pipe_kept(self) -> None:
+        markdown = (
+            "# 标题\n\n"
+            "| 术语 | 说明 |\n"
+            "| --- | --- |\n"
+            "| 骑缝签 | 内部签署区模型 `signType=EDGE/EDGE-SIGN`；epaas 模板控件 `type=QF_SIGN` |\n"
+        )
+        storage = tianyin_wiki.markdown_to_storage(markdown)
+        self.assertIn("<td><p>骑缝签</p></td>", storage)
+        self.assertIn(
+            '<td><p>内部签署区模型 <code>signType=EDGE/EDGE-SIGN</code>；epaas 模板控件 <code>type=QF_SIGN</code></p></td>',
+            storage,
+        )
+
+    def test_code_cdata_terminator_escaped(self) -> None:
+        markdown = '# 标题\n\n```xml\n<r>a]]>b</r>\n```\n'
+        storage = tianyin_wiki.markdown_to_storage(markdown)
+        self.assertIn("a]]]]><![CDATA[>b", storage)
+        self.assertIn("<ac:structured-macro ac:name=\"code\">", storage)
+
+    def test_nested_list_rendering(self) -> None:
+        markdown = (
+            "# 标题\n\n"
+            "- 一级项\n"
+            "  - 二级项 A\n"
+            "  - 二级项 B\n"
+            "- 一级项 2\n"
+        )
+        storage = tianyin_wiki.markdown_to_storage(markdown)
+        self.assertEqual(
+            storage,
+            "<ul><li>一级项<ul><li>二级项 A</li><li>二级项 B</li></ul></li>"
+            "<li>一级项 2</li></ul>",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

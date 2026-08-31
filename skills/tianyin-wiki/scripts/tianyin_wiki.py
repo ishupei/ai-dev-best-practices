@@ -1026,6 +1026,13 @@ def convert_inline(text: str) -> str:
         url = match.group(0).rstrip(_BARE_URL_TRAILING)
         return f'<a href="{url}">{url}</a>'
 
+    def convert_image(match: re.Match) -> str:
+        alt, url = match.group(1), match.group(2)
+        if re.match(r"https?://", url, re.IGNORECASE):
+            # 外链图片转 Confluence 图片宏；本地相对路径无附件上传能力，回退为链接
+            return stash("L", links, f'<ac:image><ri:url ri:value="{url}"/></ac:image>')
+        return stash("L", links, f'<a href="{url}">{alt}</a>')
+
     # 行内代码最先暂存并转义内容：代码里的标签文本（如 `x <span> y`）保持文本形态，
     # 不会在后续还原时变成真实标签
     text = re.sub(
@@ -1038,6 +1045,8 @@ def convert_inline(text: str) -> str:
     text = html.escape(text, quote=False)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", text)
+    # 图片语法必须先于链接处理，否则 ![alt](url) 会被链接规则匹配成带 ! 前缀的链接
+    text = re.sub(r"!\[([^\]]+)\]\(([^)]+)\)", convert_image, text)
     text = re.sub(
         r"\[([^\]]+)\]\(([^)]+)\)",
         lambda m: stash("L", links, f'<a href="{m.group(2)}">{m.group(1)}</a>'),
@@ -1057,7 +1066,20 @@ def is_table_separator(line: str) -> bool:
 
 
 def split_table_row(line: str) -> list[str]:
-    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+    """按 | 分割表格行；行内代码（反引号包裹）中的 | 不参与分割。"""
+    cells: list[str] = []
+    current: list[str] = []
+    in_code = False
+    for char in line.strip().strip("|"):
+        if char == "`":
+            in_code = not in_code
+        if char == "|" and not in_code:
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    cells.append("".join(current).strip())
+    return cells
 
 
 def render_table(lines: list[str]) -> str:
@@ -1077,6 +1099,8 @@ def render_table(lines: list[str]) -> str:
 
 def render_code(lines: list[str]) -> str:
     code = "\n".join(lines)
+    # CDATA 内不允许出现终止符 ]]>，否则宏内容会被截断；按标准拆分转义
+    code = code.replace("]]>", "]]]]><![CDATA[>")
     return (
         '<ac:structured-macro ac:name="code">'
         '<ac:parameter ac:name="theme">Emacs</ac:parameter>'
@@ -1095,6 +1119,24 @@ def render_attachment_image(filename: str, width: int | None = None) -> str:
     if width and width > 0:
         return f'<ac:image ac:width="{int(width)}">{attachment}</ac:image>'
     return f"<ac:image>{attachment}</ac:image>"
+
+
+def render_blockquote(lines: list[str]) -> str:
+    """`> ` 开头行集合转 blockquote；空行分段，段内多行以空格连接成一段。"""
+    paragraphs: list[str] = []
+    buffer: list[str] = []
+    for raw in lines:
+        content = re.sub(r"^\s*>\s?", "", raw).strip()
+        if not content:
+            if buffer:
+                paragraphs.append(" ".join(buffer))
+                buffer = []
+            continue
+        buffer.append(content)
+    if buffer:
+        paragraphs.append(" ".join(buffer))
+    body = "".join(f"<p>{convert_inline(paragraph)}</p>" for paragraph in paragraphs)
+    return f"<blockquote>{body}</blockquote>"
 
 
 def render_list(lines: list[str]) -> str:
@@ -1184,6 +1226,14 @@ def markdown_to_html_blocks(
             title = stripped[level:].strip()
             blocks.append(f"<h{level}>{convert_inline(title)}</h{level}>")
             i += 1
+            continue
+        if stripped.startswith(">"):
+            quote_lines = [lines[i]]
+            i += 1
+            while i < len(lines) and lines[i].strip().startswith(">"):
+                quote_lines.append(lines[i])
+                i += 1
+            blocks.append(render_blockquote(quote_lines))
             continue
         if stripped.startswith("|"):
             table_lines = [lines[i]]
