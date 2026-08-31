@@ -12,12 +12,14 @@ description: 生成或更新天印基线/1-N 详设 Markdown；仅在用户明�
 **任何动作前 MUST 选择且只选择一个路由。** 复用当前会话已确认的输入路径、模板和目标页。信息不足时只追问当前路由必需项；不得用扫描、`doctor` 或读取参考文档代替澄清。
 
 1. **本地生成**：生成/补充/更新本地详设。MUST 确认 `baseline` 或 `1-n`，执行 `init-template` → 填充 → `lint-doc`。只读选定模板。
-2. **文档 lint**：校验已有 Markdown。MUST 直接执行 `lint-doc --input <md>`；仅在已指定时使用 `--template`。仅在兼容性报错后读取 CLI 参考。
+2. **文档 lint**：校验已有 Markdown。MUST 直接执行 `lint-doc --input <md>`；模板校验按配置文件 `template` 或显式 `--template`（均未设置时为 raw 恒 OK）；raw 直推可显式 `--template raw`。仅在兼容性报错后读取 CLI 参考。
 3. **远程只读**：查看/核对已有 Wiki。MUST 只执行 `check-page`。认证或地址失败后才读取发布配置。
-4. **远程发布**：仅当用户**明确确认发布/同步**且已提供目标页或配置时执行。MUST `lint-doc` → `publish-md --dry-run` → `publish-md`；缺少确认时 MUST 停止远程动作并请求确认。
+4. **远程发布**：仅当用户**明确确认发布/同步**且已提供目标页或配置时执行。MUST `lint-doc` → `publish-md --dry-run` → `publish-md`；lint-doc 结构缺失（exit 1）不阻断发布，发布时结构差异仅提示；缺少确认时 MUST 停止远程动作并请求确认。
 5. **环境修复**：仅处理 Python、Mermaid 或浏览器缺失、异常、缓慢。MUST 先执行 `doctor`；仅在诊断指向环境问题后读取 `references/setup.md`。
 
-多意图时：已确认的发布优先；纯远程查看次之；环境错误次之；纯校验走 lint；其余本地请求走生成。“生成并发布”必须先完成本地生成与 lint；未确认前严禁发布。
+多意图时：已确认的发布优先；纯远程查看次之；环境错误次之；纯校验走 lint；其余本地请求走生成。”生成并发布”必须先完成本地生成与 lint；未确认前严禁发布。
+
+不属于以上路由的请求（`prepare-paste-html`/`merge-clear`/`upload-attachment`）仅在用户明确请求时执行，参数见 CLI 参考。
 
 ## 绝对边界
 
