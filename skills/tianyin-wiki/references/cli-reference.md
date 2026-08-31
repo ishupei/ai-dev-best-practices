@@ -148,7 +148,7 @@ python .\scripts\tianyin_wiki.py lint-doc --input .\outputs\detail-design.md
 
 模板文档必须以一级标题（主标题）开头（本地保留、推送剔除），缺少时 lint 报错；主标题不参与「多余一级章节」校验。基线模板章节为一级标题（`# 1.方案背景`），1-N 保持二级（`## 一、`）。
 
-`lint-doc` 默认 `raw` 模式（不校验任何格式，恒输出 `OK`）；按模板校验需显式 `--template baseline|1-n`。
+`lint-doc` 未传 `--template` 时取配置文件 `template` 字段（`baseline`/`1-n`）按模板校验；配置文件未设置时才为 `raw` 模式（不校验任何格式，恒输出 `OK`）。按模板校验需显式 `--template baseline|1-n`（或配置文件已设置）。
 
 文档含有 HTML 注释行（模板指引未清理）时报错：`document contains HTML comment lines (template guidance); remove them from the deliverable`。
 

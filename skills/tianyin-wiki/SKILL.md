@@ -25,7 +25,7 @@ description: 生成或更新天印基线/1-N 详设 Markdown；仅在用户明�
 - **严禁**无关工作区/Git 扫描；只有用户明确要求时才执行。
 - 远程写入必须同时具备用户明确确认、目标 `remote-url`/配置和 Python 3.9+、Wiki `username/password`；任一缺失即停止。
 - **严禁**读取、导出或回显密码、Authorization 或其他凭据。
-- 本地 Markdown 是唯一事实源。默认 `raw` 不校验结构；仅明确 `baseline`/`1-n` 时读取模板并校验。
+- 本地 Markdown 是唯一事实源。默认 `raw` 不校验结构；仅明确 `baseline`/`1-n` 时读取模板并校验。配置文件 `template` 为 `baseline`/`1-n` 时按其校验：`lint-doc` 结构缺失报错（exit 1），发布时结构差异仅提示；raw 直推可显式 `--template raw` 关闭模板校验。
 
 ## 延迟读取
 
