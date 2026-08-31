@@ -34,7 +34,7 @@ Windows 统一通过启动器执行，它会跳过 Microsoft Store 占位程序�
 python .\scripts\tianyin_wiki.py doctor --input .\outputs\detail-design.md
 ```
 
-若 `doctor` 显示 `viaNpx: true`，每次渲染都会多付出 npx 启动开销（每张图约 1.3 秒）。**首次安装时直接全局装好 `mmdc`**，一次投入持续加速：复用本机 Chrome/Edge 跳过 Chromium 下载，国内网络走 npmmirror 镜像：
+若 `doctor` 显示 `viaNpx: true`，每次渲染都会多付出 npx 启动开销。**首次安装时直接全局装好 `mmdc`**，一次投入持续加速：复用本机 Chrome/Edge 跳过 Chromium 下载，国内网络走 npmmirror 镜像：
 
 ```powershell
 set PUPPETEER_SKIP_DOWNLOAD=true
