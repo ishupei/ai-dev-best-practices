@@ -1,0 +1,19 @@
+skills/tianyin-wiki/scripts/tianyin_wiki.py
+  s_d91a9f03f2fae2::t_c1e85feef4eef1 647-649,653-660
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "fb14c578751b79340148b467d9b8327038bfc475",
+  "prompts": {},
+  "sessions": {
+    "s_d91a9f03f2fae2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a055c0-6a48-7052-926d-ed65fedc8075",
+        "model": "unknown"
+      },
+      "human_author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
