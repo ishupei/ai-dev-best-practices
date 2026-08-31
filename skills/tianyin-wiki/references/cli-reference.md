@@ -1,6 +1,6 @@
 # CLI Reference
 
-主入口：`scripts/tianyin_wiki.py`
+主入口：`scripts/tianyin_wiki.py`（相对本 skill 目录，即 SKILL.md 同目录；Windows 可用 `scripts/tianyin_wiki.ps1` 代替）。下方示例中 `.\scripts\tianyin_wiki.py` 的 `.\` 均指本 skill 目录。
 
 调用约束（安全与推送约束遵循 `SKILL.md` 执行边界，以下为 CLI 特有）：
 

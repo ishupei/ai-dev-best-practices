@@ -5,7 +5,7 @@ description: 生成或更新天印基线/1-N 详设 Markdown；仅在用户明�
 
 # Tianyin Wiki
 
-入口：`scripts/tianyin_wiki.py`；Windows 优先 `scripts/tianyin_wiki.ps1`。
+入口：本 SKILL.md 同目录 `scripts/tianyin_wiki.py`（Windows 优先 `scripts/tianyin_wiki.ps1`）。**路由中所有命令（lint-doc/publish-md/check-page/init-template/doctor 等）均为该脚本的 CLI 子命令，不得在系统 PATH 中查找同名命令**。执行形式：`python <skill 目录>/scripts/tianyin_wiki.py <command> [args]`，Windows 用 `<skill 目录>/scripts/tianyin_wiki.ps1 <command> [args]`（自动选择 Python 3.9+）；`<skill 目录>` 即本文件所在目录。参考文档中 `.\scripts\tianyin_wiki.py` 的 `.\` 均指本 skill 目录。
 
 ## 强制快速路由
 
