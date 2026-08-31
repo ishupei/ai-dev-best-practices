@@ -270,25 +270,15 @@ _SAFE_LINK_PROTOCOLS = {"http", "https", "mailto"}
 _LINK_SCHEME_TEXT_RE = re.compile(r"!?\[[^\]]*\]\(\s*<?([A-Za-z][A-Za-z0-9+.-]*):")
 # 该 wiki 底层存储不支持补充平面字符（emoji 等，实测 500），发布前按行阻断
 _ASTRAL_CHAR_RE = re.compile(r"[\U00010000-\U0010FFFF]")
-# Confluence code macro 支持的语言枚举（code-plugin 存储值，全部小写）；白名单外的
-# 围栏语言（如 http）省略 language 参数，降级为无高亮文本。传入非法枚举会让代码宏
-# 渲染抛 InvalidValueException 导致整个代码块不显示（页面实测）。
+# Confluence code macro 支持的语言枚举（对目标实例 wiki.timevale.cn:8081、Confluence 7.9.x
+# 全量实测 2026-08-31，仅 29 种）。白名单外的围栏语言（如 http、json、vb、swift）省略
+# language 参数，降级为无高亮文本。传入非法枚举会让代码宏渲染抛 InvalidValueException
+# 导致整个代码块不显示（页面实测）。
 _CODE_LANGUAGE_WHITELIST = frozenset({
-    "abap", "actionscript", "ada", "apache", "applescript", "asm", "asp",
-    "autoit", "bash", "bat", "blitzbasic", "bnf", "c", "c_mac", "cpp",
-    "csharp", "css", "coldfusion", "cuda", "d", "delphi", "diff", "dockerfile",
-    "dylan", "eiffel", "email", "erlang", "fortran", "freebasic", "genero",
-    "gherkin", "glsl", "groovy", "haskell", "html", "idl", "ini", "inno",
-    "java", "java5", "javascript", "jsp", "julia", "kotlin", "latex",
-    "lisp", "lua", "make", "markdown", "matlab", "mirc", "mxml", "mysql",
-    "nsis", "objc", "ocaml", "ocaml-brief", "oobas", "oracle11", "oracle8",
-    "pascal", "perl", "php", "plsql", "powershell", "prolog", "properties",
-    "providex", "purebasic", "python", "q", "qbasic", "r", "rails", "rebol",
-    "reg", "robots", "ruby", "rust", "sas", "scala", "scheme", "scilab",
-    "sdlbasic", "shell", "sql", "swift", "tcl", "teraterm", "text",
-    "thinbasic", "tsql", "typescript", "unreal", "vb", "vbnet", "vhdl",
-    "vim", "visualfoxpro", "whitespace", "winbatch", "xml", "xorg_conf",
-    "xpp", "yaml", "z80",
+    "actionscript", "applescript", "bash", "c", "coldfusion", "cpp", "csharp",
+    "css", "delphi", "diff", "erlang", "groovy", "html", "java", "javascript",
+    "pascal", "perl", "php", "powershell", "python", "rails", "ruby", "scala",
+    "shell", "sql", "text", "vbnet", "xml", "yaml",
 })
 
 
