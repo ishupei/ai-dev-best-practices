@@ -6,7 +6,7 @@
 
 - 未显式提供 `remote-url` 时，只允许本地模板初始化或本地文档更新；只有显式提供时才允许访问或更新远程 wiki。
 - 修改本地 Markdown 时，如果用户没有显式指定 `remote-url`，严禁同时更新远程 wiki。
-- 远程发布前建议先执行 `lint-doc` 自查；发布时模板结构校验差异（缺项/多项）仅提示，不阻断推送。
+- 远程发布前先执行 `lint-doc` 自查；发布时模板结构校验差异（缺项/多项）仅提示，不阻断推送。
 - 远程发布前可用 `check-page` 做只读验证；认证缺失会直接提示补充账号密码。
 - 首次使用或配置缺少 `username`/`password` 时，必须先补充账号密码配置、命令行参数或环境变量。
 - `publish-md` 自动识别 ````mermaid` 围栏代码块，统一渲染 PNG 后调用附件接口上传，并写入 Confluence 内联附件图片。
@@ -120,7 +120,7 @@ Mermaid 渲染按 `PATH` 探测 `mmdc`（`npm i -g @mermaid-js/mermaid-cli`）�
 python .\scripts\tianyin_wiki.py upload-attachment --file .\outputs\tianyin-mermaid-example.png --remote-url "http://wiki.timevale.cn:8081/pages/viewpage.action?pageId=123456"
 ```
 
-上传使用 `POST /rest/api/content/{pageId}/child/attachment`、`multipart/form-data` 和 `X-Atlassian-Token: no-check`。**同名附件会被 Confluence 拒绝（实测 HTTP 400，消息为 Cannot add a new attachment with same file name as an existing attachment），不会作为新版本处理**；`publish-md` 已按附件名去重，仅在上传新增图表时使用本接口。
+上传使用 `POST /rest/api/content/{pageId}/child/attachment`、`multipart/form-data` 和 `X-Atlassian-Token: no-check`。**同名附件会被 Confluence 拒绝（返回 HTTP 400，消息为 Cannot add a new attachment with same file name as an existing attachment），不会作为新版本处理**；`publish-md` 已按附件名去重，仅在上传新增图表时使用本接口。
 
 ### 辅助脚本
 
@@ -180,7 +180,7 @@ Windows 可优先使用启动器，它会先选择可用 Python 3.9+；未发现
 .\scripts\tianyin_wiki.ps1 doctor --input .\outputs\detail-design.md
 ```
 
-输出当前 Python 路径、Mermaid 渲染器来源、是否通过 `npx` 回退、自动探测到的 Chrome/Edge 路径，以及可选输入文档中的 Mermaid 图块数量。新机器首次发布较慢时，先用它确认是否缺少浏览器路径或正在走 `npx` 冷启动；当输出 `viaNpx: true` 时，`installHint` 会给出全局安装 `mmdc` 的完整命令（含国内镜像与跳过 Chromium 下载），装好后重新运行 `doctor --refresh-runtime` 即可生效。
+输出当前 Python 路径、Mermaid 渲染器来源、是否通过 `npx` 回退、自动探测到的 Chrome/Edge 路径，以及可选输入文档中的 Mermaid 图块数量。新机器首次发布前，先用它确认浏览器路径与 Mermaid 渲染器来源（`viaNpx` 是否走 npx）；当输出 `viaNpx: true` 时，`installHint` 会给出全局安装 `mmdc` 的完整命令（含国内镜像与跳过 Chromium 下载），装好后重新运行 `doctor --refresh-runtime` 即可生效。
 
 运行时探测结果会缓存到 `~/.cache/tianyin-wiki/runtime.json`，后续 `publish-md` 优先复用缓存，减少环境探测耗时。安装新工具或调整浏览器路径后，用下面的命令刷新缓存：
 
@@ -217,6 +217,6 @@ python .\scripts\tianyin_wiki.py check-page
 
 Markdown 渲染基于 CommonMark/GFM AST 解析（`markdown-it-py`），支持 ATX/Setext 标题、`*`/`+`/`-` 无序列表、`1.` 有序列表、`**bold**`/`__bold__`/`*italic*`/`_italic_`/`~~删除线~~`、行内与围栏代码（保留语言）、引用块（含嵌套）、GFM 表格（对齐/转义竖线/无外侧竖线）、链接（嵌套括号、引用式、尖括号自动链接、邮箱、标题属性、裸 URL）、外链图片、分隔线（`---`/`***`/`___`）、硬换行、HTML 注释与白名单行内 HTML（`span` 样式、`br`、`u`、`sub`、`sup`）、任务列表（降级为字面 `[ ]`）、Mermaid 图。
 
-`prepare-paste-html` 和 `publish-md` 会在访问远程前拒绝以下构造（逐行报错并给出替代写法）：非白名单 raw HTML 标签、`javascript:` 等不安全链接协议、本地相对路径图片、该 wiki 不支持的补充平面字符（emoji 等 4 字节 UTF-8，实测入库 500）。使用 `lint-doc` 可在发布前执行同一兼容性检查。
+`prepare-paste-html` 和 `publish-md` 会在访问远程前拒绝以下构造（逐行报错并给出替代写法）：非白名单 raw HTML 标签或属性、`span` 中除 `color` / `background-color`（仅 `#RGB`、`#RRGGBB`、`rgb(r,g,b)`）和 `text-decoration`（仅 `underline`、`line-through`、`none`）外的 CSS、`javascript:` 等不安全链接协议、本地相对路径图片、该 wiki 不支持的补充平面字符（emoji 等 4 字节 UTF-8，保存时返回 HTTP 500）。`br`、`u`、`sub`、`sup` 不接受属性；所有 `on*` 事件属性均被拒绝。使用 `lint-doc` 可在发布前执行同一兼容性检查。
 
 已知平台差异：Confluence 保存时会把 span 的十六进制颜色归一化为 `rgb()` 形式（比较逻辑已兼容）；有序列表的 `start` 属性会被剥离（列表始终从 1 开始）；`<u>`/`<sub>`/`<sup>` 与删除线 span 在编辑器内保留。

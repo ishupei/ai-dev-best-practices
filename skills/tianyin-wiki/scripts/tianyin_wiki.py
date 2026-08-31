@@ -253,8 +253,18 @@ _MARKUP_ENTITY_RE = re.compile(r"&(?:lt|gt|amp|quot|apos|#\d+;|#x[0-9a-fA-F]+;)"
 # Confluence 保存 span 标注时把十六进制颜色规范化为 rgb() 形式，比较时归一化回 hex
 _RGB_COLOR_RE = re.compile(r"color: rgb\((\d+),\s*(\d+),\s*(\d+)\);?")
 _HTML_TAG_NAME_RE = re.compile(r"</?([A-Za-z][\w:-]*)(?:\s[^>]*)?/?>")
+_HTML_TAG_RE = re.compile(
+    r"^\s*<\s*(?P<closing>/)?\s*(?P<name>[A-Za-z][\w:-]*)(?P<attrs>[^<>]*?)(?P<self_closing>/)?\s*>\s*$"
+)
+_HTML_ATTRIBUTE_RE = re.compile(
+    r"\s+(?P<name>[A-Za-z_:][\w:.-]*)(?:\s*=\s*(?:\"(?P<double>[^\"]*)\"|'(?P<single>[^']*)'|(?P<unquoted>[^\s\"'=<>`]+)))?"
+)
+_HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?$")
+_RGB_COLOR_VALUE_RE = re.compile(r"rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$", re.IGNORECASE)
 # raw HTML 白名单（标注色块 span、换行、下划线/上下标）；白名单外一律转义为可见文本
 _SUPPORTED_INLINE_HTML_TAG_NAMES = {"span", "br", "u", "sub", "sup"}
+_SAFE_SPAN_STYLE_PROPERTIES = {"color", "background-color", "text-decoration"}
+_SAFE_TEXT_DECORATIONS = {"underline", "line-through", "none"}
 _SAFE_LINK_PROTOCOLS = {"http", "https", "mailto"}
 # 文本层兜底识别被解析器拒绝的 [x](scheme:...) 链接形态（scheme 白名单外的协议）
 _LINK_SCHEME_TEXT_RE = re.compile(r"!?\[[^\]]*\]\(\s*<?([A-Za-z][A-Za-z0-9+.-]*):")
@@ -1085,15 +1095,95 @@ def is_safe_link_url(url: str) -> bool:
     return scheme in _SAFE_LINK_PROTOCOLS or scheme == ""
 
 
-def render_raw_html(raw: str) -> str:
-    """raw HTML：HTML 注释剔除；白名单标签原样透传；其余转义为可见文本。"""
+def parse_html_attributes(raw_attributes: str) -> dict[str, str] | None:
+    """Parse one tag's attributes, rejecting malformed, boolean, and duplicate attributes."""
+    attributes: dict[str, str] = {}
+    position = 0
+    while position < len(raw_attributes):
+        match = _HTML_ATTRIBUTE_RE.match(raw_attributes, position)
+        if not match:
+            return None
+        name = match.group("name").lower()
+        value = match.group("double") or match.group("single") or match.group("unquoted")
+        if value is None or name in attributes:
+            return None
+        attributes[name] = html.unescape(value)
+        position = match.end()
+    return attributes
+
+
+def normalize_safe_css_color(value: str) -> str | None:
+    """Normalize the small color-value subset supported in span styles."""
+    normalized = value.strip().lower()
+    if _HEX_COLOR_RE.fullmatch(normalized):
+        return normalized
+    match = _RGB_COLOR_VALUE_RE.fullmatch(normalized)
+    if match and all(0 <= int(component) <= 255 for component in match.groups()):
+        return f"rgb({int(match.group(1))}, {int(match.group(2))}, {int(match.group(3))})"
+    return None
+
+
+def sanitize_span_style(style: str) -> str | None:
+    """Allow only declarative color and text-decoration styles for span markup."""
+    declarations: list[str] = []
+    seen_properties: set[str] = set()
+    for declaration in style.split(";"):
+        declaration = declaration.strip()
+        if not declaration:
+            continue
+        if ":" not in declaration:
+            return None
+        property_name, value = (part.strip().lower() for part in declaration.split(":", 1))
+        if property_name not in _SAFE_SPAN_STYLE_PROPERTIES or property_name in seen_properties:
+            return None
+        if property_name in {"color", "background-color"}:
+            safe_value = normalize_safe_css_color(value)
+        else:
+            safe_value = value if value in _SAFE_TEXT_DECORATIONS else None
+        if safe_value is None:
+            return None
+        seen_properties.add(property_name)
+        declarations.append(f"{property_name}: {safe_value}")
+    return "; ".join(declarations)
+
+
+def sanitize_raw_html(raw: str) -> str | None:
+    """Return safe, canonical inline HTML or None when the markup exceeds the whitelist."""
     stripped = raw.strip()
     if stripped.startswith("<!--"):
         return ""
-    tag_match = _HTML_TAG_NAME_RE.match(stripped)
-    if tag_match and tag_match.group(1).lower() in _SUPPORTED_INLINE_HTML_TAG_NAMES:
-        return raw
-    return html.escape(raw, quote=False)
+    match = _HTML_TAG_RE.fullmatch(stripped)
+    if not match:
+        return None
+    tag_name = match.group("name").lower()
+    if tag_name not in _SUPPORTED_INLINE_HTML_TAG_NAMES:
+        return None
+    attributes = match.group("attrs")
+    is_closing = bool(match.group("closing"))
+    is_self_closing = bool(match.group("self_closing"))
+    if is_closing:
+        return f"</{tag_name}>" if not attributes.strip() and not is_self_closing else None
+    parsed_attributes = parse_html_attributes(attributes)
+    if parsed_attributes is None:
+        return None
+    if tag_name == "span":
+        if is_self_closing or set(parsed_attributes) - {"style"}:
+            return None
+        if "style" not in parsed_attributes:
+            return "<span>"
+        safe_style = sanitize_span_style(parsed_attributes["style"])
+        return f'<span style="{escape_attr_value(safe_style)}">' if safe_style else None
+    if parsed_attributes:
+        return None
+    if tag_name == "br":
+        return "<br />"
+    return f"<{tag_name}>" if not is_self_closing else None
+
+
+def render_raw_html(raw: str) -> str:
+    """Render only sanitized inline HTML; unsupported markup becomes visible text."""
+    sanitized = sanitize_raw_html(raw)
+    return sanitized if sanitized is not None else html.escape(raw, quote=False)
 
 
 def render_code_macro(code: str, language: str | None) -> str:
@@ -1352,6 +1442,8 @@ def markdown_conversion_issues(markdown_text: str) -> list[str]:
                     tag = tag_match.group(1) if tag_match else None
                     if not (tag and tag.lower() in _SUPPORTED_INLINE_HTML_TAG_NAMES):
                         add(token_line, f"raw HTML tag `{tag or '?'}` is not supported")
+                    elif sanitize_raw_html(token.content) is None:
+                        add(token_line, "raw HTML attributes or CSS are not allowed")
             elif token_type == "link_open":
                 href = token.attrGet("href") or ""
                 if not is_safe_link_url(href):
