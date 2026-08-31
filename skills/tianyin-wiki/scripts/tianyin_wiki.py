@@ -21,7 +21,6 @@ import uuid
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -623,7 +622,7 @@ def _markdown_parser():
     return build_markdown_parser()
 
 
-def parse_markdown(markdown_text: str) -> list:
+def parse_markdown(markdown_text: str) -> "list[Token]":
     """解析 Markdown 为 token 流；mermaid 提取与 storage 渲染共用同一解析，保证围栏顺序一致。"""
     return _markdown_parser().parse(normalize_newlines(markdown_text))
 
@@ -1083,7 +1082,7 @@ def render_code_macro(code: str, language: str | None) -> str:
     """代码宏（保留围栏语言信息）；CDATA 终止符 ]]> 按标准拆分转义。"""
     code = code.replace("]]>", "]]]]><![CDATA[>")
     language_param = (
-        f'<ac:parameter ac:name="language">{html.escape(language, quote=True)}</ac:parameter>'
+        f'<ac:parameter ac:name="language">{escape_attr_value(language)}</ac:parameter>'
         if language
         else ""
     )
@@ -1102,7 +1101,7 @@ def render_code_for_paste(code: str, language: str | None) -> str:
 
 
 def render_attachment_image(filename: str, width: int | None = None) -> str:
-    attachment = f'<ri:attachment ri:filename="{html.escape(filename, quote=True)}" />'
+    attachment = f'<ri:attachment ri:filename="{escape_attr_value(filename)}" />'
     if width and width > 0:
         return f'<ac:image ac:width="{int(width)}">{attachment}</ac:image>'
     return f"<ac:image>{attachment}</ac:image>"
@@ -1272,9 +1271,6 @@ def render_block_tokens(
             rendered = render_raw_html(token.content)
             if rendered:
                 out.append(rendered if rendered.startswith("<") else f"<p>{rendered}</p>")
-            continue
-        if token_type == "image":
-            out.append(f"<p>{render_inline([token])}</p>")
             continue
         if token_type.endswith("_close"):
             if token_type == "table_close":
