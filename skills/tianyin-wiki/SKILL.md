@@ -14,6 +14,23 @@ description: 生成/更新天印基线或 1-N 详设 Markdown；也可在用户�
 - 只读确认远程页：用 `check-page`。
 - 新机器或 Mermaid 慢：用 `doctor`；工具路径缓存异常时加 `--refresh-runtime`。
 
+## 常用命令（免查参考文档）
+
+`<wiki-url>` 形如 `http://wiki.timevale.cn:8081/pages/viewpage.action?pageId=<id>`；本机已配置 `baseUrl`/`pageId`/凭据时省略 `--remote-url`。Windows 可用 `.\scripts\tianyin_wiki.ps1` 代替 `python .\scripts\tianyin_wiki.py`。
+
+```powershell
+# 发布预检（只读，不传附件不更新页面）
+python .\scripts\tianyin_wiki.py publish-md --dry-run --input <md> --remote-url "<wiki-url>"
+# 正式发布（raw 默认不校验结构；发布前建议先 lint-doc）
+python .\scripts\tianyin_wiki.py publish-md --input <md> --remote-url "<wiki-url>"
+# 只读检查目标页面
+python .\scripts\tianyin_wiki.py check-page --remote-url "<wiki-url>"
+# 环境诊断（Python/Mermaid/浏览器/图块数量）
+python .\scripts\tianyin_wiki.py doctor [--refresh-runtime]
+# 结构校验（发布前自查）
+python .\scripts\tianyin_wiki.py lint-doc [--template baseline|1-n] --input <md>
+```
+
 ## 必守
 
 - 远程写入必须有用户明确确认和目标 `remote-url`/配置；本地 md 是唯一事实源。
@@ -23,7 +40,7 @@ description: 生成/更新天印基线或 1-N 详设 Markdown；也可在用户�
 
 ## 按需读取
 
-- 参数/Mermaid/附件：`references/cli-reference.md`
+- 非常用参数（`--image-width`/`--mermaid-scale`/附件/`merge-clear`）或转换兼容性细节：`references/cli-reference.md`
 - 发布与账号配置：`references/remote-publish.md`
 - 新机器环境：`references/setup.md`
 - 生成模板细节：`references/templates/`（只读选定模板）
