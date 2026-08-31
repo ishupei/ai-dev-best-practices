@@ -976,13 +976,44 @@ def cmd_merge_clear(args: argparse.Namespace) -> int:
     return 0
 
 
+# 行内暂存占位符：先整体暂存行内代码与 markdown 链接，避免裸 URL 自动链接规则
+# 把 <code>/href 内容二次包裹成链接；占位符在还原前不参与其他行内转换
+_INLINE_STASH_RE = re.compile(r"\x00S(\d+)\x00")
+# 裸 URL 自动链接（不含协议相对地址与 www. 形式）；URL 字符类排除空白、HTML
+# 特殊符、引号及 CJK/全角标点（中文正文中 URL 后常紧跟中文，防止把正文吞进链接），
+# 结尾剩余的 ASCII 句读符号在链接时剥离
+_BARE_URL_RE = re.compile(
+    r"(?<![\w])https?://[^\s<>\"'`\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+",
+    re.IGNORECASE,
+)
+_BARE_URL_TRAILING = ".,;:!?)]"
+
+
 def convert_inline(text: str) -> str:
     text = html.escape(text, quote=False)
-    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+    stashed: list[str] = []
+
+    def stash(value: str) -> str:
+        stashed.append(value)
+        return f"\x00S{len(stashed) - 1}\x00"
+
+    def restore(match: re.Match) -> str:
+        return stashed[int(match.group(1))]
+
+    def link_bare_url(match: re.Match) -> str:
+        url = match.group(0).rstrip(_BARE_URL_TRAILING)
+        return f'<a href="{url}">{url}</a>'
+
+    text = re.sub(r"`([^`]+)`", lambda m: stash(f"<code>{m.group(1)}</code>"), text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", text)
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
-    return text
+    text = re.sub(
+        r"\[([^\]]+)\]\(([^)]+)\)",
+        lambda m: stash(f'<a href="{m.group(2)}">{m.group(1)}</a>'),
+        text,
+    )
+    text = _BARE_URL_RE.sub(link_bare_url, text)
+    return _INLINE_STASH_RE.sub(restore, text)
 
 
 def is_table_separator(line: str) -> bool:
