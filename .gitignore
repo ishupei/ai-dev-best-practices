@@ -33,3 +33,7 @@ out/
 *.log
 reasonix.*
 *.reasonix
+
+# Python
+__pycache__/
+*.pyc
