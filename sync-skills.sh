@@ -5,10 +5,11 @@
 #
 # 功能:
 #   1. 从中心仓库 skills/ 同步 Claude Code skills 到全局 (~/.claude/skills/)
-#   2. 从中心仓库 skills/ 同步到目标项目（Cursor / Trae）
+#   2. 从中心仓库 skills/ 同步 ZCode skills 到全局 (~/.zcode/skills/)
+#   3. 从中心仓库 skills/ 同步到目标项目（Cursor / Trae）
 #
 # 示例:
-#   bash sync-skills.sh                          # 同步 Claude Code 全局
+#   bash sync-skills.sh                          # 同步 Claude Code + ZCode 全局
 #   bash sync-skills.sh --target ~/my-project    # 同步到指定项目
 #   bash sync-skills.sh --target all             # 同步到所有已注册项目
 # ============================================================
@@ -30,6 +31,14 @@ NC='\033[0m'
 log_ok()   { echo -e "${GREEN}[OK]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_err()  { echo -e "${RED}[ERR]${NC} $1"; }
+
+# 复制技能目录并剔除不随 skill 分发的开发产物（单测、字节码缓存）
+copy_skill_dir() {
+    local src="$1" dest="$2"
+    cp -R "$src" "$dest"
+    rm -rf "$dest/tests"
+    rm -rf "$dest"/*/__pycache__ 2>/dev/null || true
+}
 
 # ---- 1. 从中心仓库同步 Claude Code 全局 skills ----
 sync_claude_global() {
@@ -53,7 +62,7 @@ sync_claude_global() {
         local dest_dir="$claude_skills_global/$skill_name"
         rm -rf "$dest_dir"
         mkdir -p "$claude_skills_global"
-        cp -R "$d" "$dest_dir"
+        copy_skill_dir "$d" "$dest_dir"
         log_ok "  $skill_name"
         ((count++)) || true
     done
@@ -61,7 +70,37 @@ sync_claude_global() {
     echo "  共同步 $count 个技能目录到 $claude_skills_global"
 }
 
-# ---- 2. 同步 Cursor/Trae skills 到目标项目 ----
+# ---- 2. 从中心仓库同步 ZCode 全局 skills ----
+sync_zcode_global() {
+    local zcode_skills_global="$HOME/.zcode/skills"
+    mkdir -p "$zcode_skills_global"
+
+    echo ""
+    echo "=== 同步 ZCode 全局 Skills ==="
+
+    local src_skills="$SOURCE_DIR/skills"
+    if [ ! -d "$src_skills" ]; then
+        log_warn "未找到 $src_skills，跳过 ZCode 同步"
+        return
+    fi
+
+    local count=0
+    for d in "$src_skills"/*/; do
+        [ -d "$d" ] || continue
+        local skill_name=$(basename "$d")
+        [ -f "$d/SKILL.md" ] || continue
+        local dest_dir="$zcode_skills_global/$skill_name"
+        rm -rf "$dest_dir"
+        mkdir -p "$zcode_skills_global"
+        copy_skill_dir "$d" "$dest_dir"
+        log_ok "  $skill_name"
+        ((count++)) || true
+    done
+
+    echo "  共同步 $count 个技能目录到 $zcode_skills_global"
+}
+
+# ---- 3. 同步 Cursor/Trae skills 到目标项目 ----
 sync_project_targets() {
     local target="$1"
 
@@ -110,7 +149,7 @@ sync_project_targets() {
 
 }
 
-# ---- 3. 注册项目 ----
+# ---- 4. 注册项目 ----
 register_target() {
     local target="$1"
     target="${target/#\~/$HOME}"
@@ -124,7 +163,7 @@ register_target() {
     fi
 }
 
-# ---- 4. 同步所有已注册项目 ----
+# ---- 5. 同步所有已注册项目 ----
 sync_all_registered() {
     if [ ! -f "$REGISTRY_FILE" ]; then
         log_warn "暂无已注册项目。使用 --register <路径> 添加项目。"
@@ -144,8 +183,9 @@ main() {
     echo "  中心仓库: $SOURCE_DIR"
     echo "============================================"
 
-    # 始终同步 Claude Code 全局 skills
+    # 始终同步 Claude Code 与 ZCode 全局 skills
     sync_claude_global
+    sync_zcode_global
 
     # 解析参数
     while [[ $# -gt 0 ]]; do
@@ -177,7 +217,7 @@ main() {
             --help|-h)
                 echo ""
                 echo "用法:"
-                echo "  bash sync-skills.sh                          # 同步 Claude Code 全局"
+                echo "  bash sync-skills.sh                          # 同步 Claude Code + ZCode 全局"
                 echo "  bash sync-skills.sh --target ~/project       # 同步到指定项目"
                 echo "  bash sync-skills.sh --target all              # 同步到所有已注册项目"
                 echo "  bash sync-skills.sh --register ~/project     # 注册一个项目"

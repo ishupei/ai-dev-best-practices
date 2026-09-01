@@ -1,14 +1,15 @@
-# ============================================================
+﻿# ============================================================
 # AI Skills 同步脚本 (PowerShell)
 # 用法: .\sync-skills.ps1 [-Target <项目路径|all>] [-Register <项目路径>] [-List]
 #
 # 功能:
 #   1. 从中心仓库 skills/ 同步 Claude Code skills 到全局 (~/.claude/skills/)
 #   2. 从中心仓库 skills/ 同步 Cursor skills 到全局 (~/.cursor/skills/)
-#   3. 从中心仓库 skills/ 同步到目标项目（Cursor / Trae）
+#   3. 从中心仓库 skills/ 同步 ZCode skills 到全局 (~/.zcode/skills/)
+#   4. 从中心仓库 skills/ 同步到目标项目（Cursor / Trae）
 #
 # 示例:
-#   .\sync-skills.ps1                                    # 同步全局 (Claude + Cursor)
+#   .\sync-skills.ps1                                    # 同步全局 (Claude + Cursor + ZCode)
 #   .\sync-skills.ps1 -Target D:\work\my-project         # 同步到指定项目
 #   .\sync-skills.ps1 -Target all                        # 同步到所有已注册项目
 #   .\sync-skills.ps1 -Register D:\work\my-project       # 注册一个项目
@@ -31,6 +32,18 @@ $RegistryFile = Join-Path $SourceDir ".sync-targets"
 function Log-Ok($msg)   { Write-Host "[OK]   $msg" -ForegroundColor Green }
 function Log-Warn($msg) { Write-Host "[WARN] $msg" -ForegroundColor Yellow }
 function Log-Err($msg)  { Write-Host "[ERR]  $msg" -ForegroundColor Red }
+
+# ---- 复制技能目录并剔除不随 skill 分发的开发产物（单测、字节码缓存） ----
+function Copy-SkillDir {
+    param([string]$Source, [string]$Destination)
+    Copy-Item $Source -Destination $Destination -Recurse -Force
+    $testDir = Join-Path $Destination "tests"
+    if (Test-Path $testDir) {
+        Remove-Item $testDir -Recurse -Force
+    }
+    Get-ChildItem $Destination -Directory -Recurse -Filter "__pycache__" -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force
+}
 
 # ---- 1. 从中心仓库同步 Claude Code 全局 skills ----
 function Sync-ClaudeGlobal {
@@ -56,7 +69,7 @@ function Sync-ClaudeGlobal {
         if (Test-Path $targetDir) {
             Remove-Item $targetDir -Recurse -Force
         }
-        Copy-Item $d.FullName -Destination $targetDir -Recurse -Force
+        Copy-SkillDir $d.FullName $targetDir
         Log-Ok "  $($d.Name)"
     }
 
@@ -81,7 +94,7 @@ function Sync-CursorGlobal {
         if (Test-Path $targetDir) {
             Remove-Item $targetDir -Recurse -Force
         }
-        Copy-Item $_.FullName -Destination $targetDir -Recurse -Force
+        Copy-SkillDir $_.FullName $targetDir
         Log-Ok "  $($_.Name)"
         $count++
     }
@@ -89,7 +102,38 @@ function Sync-CursorGlobal {
     Write-Host "  共同步 $count 个技能到 $cursorSkillsDir"
 }
 
-# ---- 3. 同步 Cursor / Trae 到目标项目 ----
+# ---- 3. 从中心仓库同步 ZCode 全局 skills ----
+function Sync-ZCodeGlobal {
+    $zcodeSkillsGlobal = Join-Path $env:USERPROFILE ".zcode\skills"
+    if (-not (Test-Path $zcodeSkillsGlobal)) {
+        New-Item -ItemType Directory -Path $zcodeSkillsGlobal -Force | Out-Null
+    }
+
+    Write-Host ""
+    Write-Host "=== 同步 ZCode 全局 Skills ==="
+
+    $sourceSkills = Join-Path $SourceDir "skills"
+    if (-not (Test-Path $sourceSkills -PathType Container)) {
+        Log-Warn "未找到 $sourceSkills，跳过 ZCode 同步"
+        return
+    }
+
+    $skillDirs = Get-ChildItem -Path $sourceSkills -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path (Join-Path $_.FullName "SKILL.md") }
+
+    foreach ($d in $skillDirs) {
+        $targetDir = Join-Path $zcodeSkillsGlobal $d.Name
+        if (Test-Path $targetDir) {
+            Remove-Item $targetDir -Recurse -Force
+        }
+        Copy-SkillDir $d.FullName $targetDir
+        Log-Ok "  $($d.Name)"
+    }
+
+    Write-Host "  共同步 $($skillDirs.Count) 个技能目录到 $zcodeSkillsGlobal"
+}
+
+# ---- 4. 同步 Cursor / Trae 到目标项目 ----
 function Sync-ProjectTargets($targetPath) {
     if (-not (Test-Path $targetPath -PathType Container)) {
         Log-Err "目标项目不存在: $targetPath"
@@ -130,7 +174,7 @@ function Sync-ProjectTargets($targetPath) {
     }
 }
 
-# ---- 4. 注册项目 ----
+# ---- 5. 注册项目 ----
 function Register-Target($targetPath) {
     $resolved = (Resolve-Path $targetPath).Path
 
@@ -142,7 +186,7 @@ function Register-Target($targetPath) {
     }
 }
 
-# ---- 5. 同步所有已注册项目 ----
+# ---- 6. 同步所有已注册项目 ----
 function Sync-AllRegistered {
     if (-not (Test-Path $RegistryFile)) {
         Log-Warn "暂无已注册项目。使用 -Register <路径> 添加项目。"
@@ -164,7 +208,7 @@ function Main {
     if ($Help) {
         Write-Host ""
         Write-Host "用法:"
-        Write-Host "  .\sync-skills.ps1                                # 同步全局 (Claude + Cursor)"
+        Write-Host "  .\sync-skills.ps1                                # 同步全局 (Claude + Cursor + ZCode)"
         Write-Host "  .\sync-skills.ps1 -Target D:\work\project        # 同步到指定项目"
         Write-Host "  .\sync-skills.ps1 -Target all                    # 同步到所有已注册项目"
         Write-Host "  .\sync-skills.ps1 -Register D:\work\project      # 注册一个项目"
@@ -175,6 +219,7 @@ function Main {
     # 始终同步全局配置
     Sync-ClaudeGlobal
     Sync-CursorGlobal
+    Sync-ZCodeGlobal
 
     # 处理注册
     if ($Register) {
