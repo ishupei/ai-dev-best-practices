@@ -9,20 +9,28 @@ The storage model is intentionally split:
 from __future__ import annotations
 
 import argparse
-import csv
+import contextlib
+import io
 import importlib
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 
-DEFAULT_LIMIT = 100
-MAX_LIMIT = 5000
+DEFAULT_LIMIT = 20
+MAX_LIMIT = 500
+DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024
+MAX_OUTPUT_BYTES = 1024 * 1024
+MAX_CELL_CHARS = 200
+STORE_LOCK_TIMEOUT_SECONDS = 10
+STALE_STORE_LOCK_SECONDS = 300
 MIN_MATCH_LEN = 3
 DEFAULT_DIR_NAME = "ai-db"
 INDEX_FILE_NAME = "environments.json"
@@ -50,17 +58,24 @@ MUTATING_TOKENS = {
     "unlock",
     "update",
 }
-MUTATING_PHRASES = ("for update", "into outfile", "into dumpfile")
+MUTATING_PHRASES = (
+    "for update",
+    "for share",
+    "lock in share mode",
+    "into outfile",
+    "into dumpfile",
+)
 SECRET_KEYS = {"password", "pwd", "token", "secret", "access_key", "private_key"}
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_$][A-Za-z0-9_.$-]{0,255}$")
 TABLE_REF_PATTERN = re.compile(
-    r"\b(?:from|join|update|into|table)\s+(`?[A-Za-z0-9_$][A-Za-z0-9_$-]*`?(?:\.`?[A-Za-z0-9_$][A-Za-z0-9_$-]*`?)?)",
+    r"\b(?:from|join|table)\s+(`?[A-Za-z0-9_$][A-Za-z0-9_$-]*`?(?:\.`?[A-Za-z0-9_$][A-Za-z0-9_$-]*`?)?)",
     re.IGNORECASE,
 )
 DESCRIBE_PATTERN = re.compile(
     r"^\s*(?:describe|desc)\s+(`?[A-Za-z0-9_$][A-Za-z0-9_$-]*`?(?:\.`?[A-Za-z0-9_$][A-Za-z0-9_$-]*`?)?)",
     re.IGNORECASE,
 )
+SELECT_LIMIT_PATTERN = re.compile(r"\blimit\s+(\d+|%s)(?:\s+offset\s+\d+)?\s*$", re.IGNORECASE)
 
 
 def default_store_dir() -> Path:
@@ -101,11 +116,54 @@ def read_json(path: Path) -> dict[str, Any]:
     return data
 
 
-def write_json(path: Path, data: dict[str, Any]) -> None:
+def write_bytes(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+    descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(descriptor, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def write_json(path: Path, data: dict[str, Any]) -> None:
+    payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
+    write_bytes(path, payload)
+
+
+@contextlib.contextmanager
+def store_write_lock(store_dir: Path):
+    store_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = store_dir / ".ai-db.lock"
+    deadline = time.monotonic() + STORE_LOCK_TIMEOUT_SECONDS
+    descriptor = None
+    while descriptor is None:
+        try:
+            descriptor = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(descriptor, str(os.getpid()).encode("ascii"))
+        except FileExistsError:
+            try:
+                if time.time() - lock_path.stat().st_mtime > STALE_STORE_LOCK_SECONDS:
+                    lock_path.unlink()
+                    continue
+            except FileNotFoundError:
+                continue
+            if time.monotonic() >= deadline:
+                raise SystemExit("Environment store is busy. Retry the write command shortly.")
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        os.close(descriptor)
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def load_index(store_dir: Path, create: bool = False) -> dict[str, Any]:
@@ -135,7 +193,7 @@ def load_index_optional(store_dir: Path) -> dict[str, Any] | None:
 
 
 def env_summary_rows(store_dir: Path, index: dict[str, Any]) -> list[dict[str, Any]]:
-    """Build secret-free per-environment summaries shared by list-envs and status."""
+    """Build secret-free per-environment summaries for list-envs."""
     rows: list[dict[str, Any]] = []
     default_env = index.get("default_env")
     for env, entry in index.get("environments", {}).items():
@@ -303,10 +361,14 @@ def spec_from_mysql_url(url: str) -> dict[str, Any]:
             "so the secret is not exposed in process lists or logs",
             file=sys.stderr,
         )
+    try:
+        port = parsed.port or 3306
+    except ValueError as exc:
+        raise SystemExit(f"Invalid MySQL URL port: {exc}") from exc
     spec: dict[str, Any] = {
         "driver": "mysql",
         "host": parsed.hostname,
-        "port": parsed.port or 3306,
+        "port": port,
         "database": unquote(parsed.path.lstrip("/")) if parsed.path else None,
         "user": unquote(parsed.username) if parsed.username else None,
         "password": unquote(parsed.password) if parsed.password else None,
@@ -315,7 +377,9 @@ def spec_from_mysql_url(url: str) -> dict[str, Any]:
     return {k: v for k, v in spec.items() if v is not None}
 
 
-def load_env_spec(store_dir: Path, env: str) -> tuple[str, Path, dict[str, Any]]:
+def load_env_spec(
+    store_dir: Path, env: str, resolve_values: bool = True
+) -> tuple[str, Path, dict[str, Any]]:
     index = load_index(store_dir)
     env_name = index.get("default_env") if env == "@default" else env
     if not env_name:
@@ -331,7 +395,8 @@ def load_env_spec(store_dir: Path, env: str) -> tuple[str, Path, dict[str, Any]]
         path = normalize_path(entry["file"], store_dir)
     else:
         raise SystemExit(f"Invalid index entry for environment: {env_name}")
-    return env_name, path, resolve_env_values(read_json(path))
+    spec = read_json(path)
+    return env_name, path, resolve_env_values(spec) if resolve_values else spec
 
 
 def get_spec(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
@@ -340,7 +405,7 @@ def get_spec(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
         raise SystemExit(
             "Specify exactly one connection source: --env, --direct-json, or --url. "
             "When no environment is known, run the 'resolve-env' command to infer one "
-            "from session context or the git branch, or run 'status' to inspect the store."
+            "from session context or the git branch."
         )
     if args.env:
         env_name, _, spec = load_env_spec(Path(args.store_dir), args.env)
@@ -360,8 +425,26 @@ def ensure_mysql_spec(spec: dict[str, Any]) -> dict[str, Any]:
         raise SystemExit(f"MySQL connection is missing required field(s): {', '.join(missing)}")
     result = dict(spec)
     result["driver"] = "mysql"
-    result.setdefault("port", 3306)
+    raw_port = result.get("port", 3306)
+    if isinstance(raw_port, bool):
+        raise SystemExit("MySQL connection port must be an integer from 1 to 65535.")
+    try:
+        port = int(raw_port)
+    except (TypeError, ValueError) as exc:
+        raise SystemExit("MySQL connection port must be an integer from 1 to 65535.") from exc
+    if not 1 <= port <= 65535:
+        raise SystemExit("MySQL connection port must be an integer from 1 to 65535.")
+    result["port"] = port
     result.setdefault("charset", "utf8mb4")
+    for field in ("connect_timeout", "read_timeout", "write_timeout"):
+        value = result.get(field)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0):
+            raise SystemExit(f"MySQL connection {field} must be a positive number.")
+    options = result.get("options")
+    if options is None:
+        result["options"] = {}
+    elif not isinstance(options, dict):
+        raise SystemExit("MySQL connection options must be an object.")
     return result
 
 
@@ -421,7 +504,6 @@ def connect_mysql(spec: dict[str, Any]) -> Any:
         "read_timeout": spec.get("read_timeout"),
         "write_timeout": spec.get("write_timeout"),
         "autocommit": bool(spec.get("autocommit", False)),
-        "cursorclass": None,
     }
     kwargs.update(spec.get("options") or {})
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
@@ -457,7 +539,7 @@ def normalized_sql(sql: str) -> str:
     return sql
 
 
-def sql_for_guard(sql: str) -> str:
+def sql_for_guard(sql: str) -> tuple[str, bool]:
     result: list[str] = []
     idx = 0
     length = len(sql)
@@ -471,6 +553,8 @@ def sql_for_guard(sql: str) -> str:
             result.append(" ")
             continue
         if char == "/" and nxt == "*":
+            if idx + 2 < length and sql[idx + 2] == "!":
+                return "", True
             end = sql.find("*/", idx + 2)
             if end == -1:
                 break
@@ -496,11 +580,13 @@ def sql_for_guard(sql: str) -> str:
             continue
         result.append(char.lower())
         idx += 1
-    return "".join(result)
+    return "".join(result), False
 
 
 def is_query_only(sql: str) -> bool:
-    guarded = sql_for_guard(normalized_sql(sql))
+    guarded, executable_comment = sql_for_guard(sql)
+    if executable_comment:
+        return False
     statements = [part.strip() for part in guarded.split(";") if part.strip()]
     if len(statements) != 1:
         return False
@@ -515,8 +601,39 @@ def is_query_only(sql: str) -> bool:
     return not any(phrase in collapsed for phrase in MUTATING_PHRASES)
 
 
-def normalize_table_ref(value: str) -> str:
-    return value.replace("`", "")
+def validate_select_limit(sql: str, maximum: int) -> None:
+    guarded, executable_comment = sql_for_guard(sql)
+    if executable_comment:
+        return
+    statement = guarded.strip().rstrip(";").strip()
+    first = statement.split(None, 1)[0] if statement else ""
+    if first != "select":
+        return
+    match = SELECT_LIMIT_PATTERN.search(statement)
+    if not match:
+        raise SystemExit("SELECT queries must end with an explicit LIMIT no larger than --limit.")
+    requested_limit = match.group(1)
+    if requested_limit.isdigit() and int(requested_limit) > maximum:
+        raise SystemExit("SELECT LIMIT must not exceed --limit.")
+
+
+def extract_sql_limit(sql: str) -> int | None:
+    """Return the literal LIMIT value of a SELECT statement, or None when it is
+    parameterized (%s) or the statement is not a plain SELECT (SHOW/EXPLAIN)."""
+    guarded, executable_comment = sql_for_guard(sql)
+    if executable_comment:
+        return None
+    statement = guarded.strip().rstrip(";").strip()
+    first = statement.split(None, 1)[0] if statement else ""
+    if first != "select":
+        return None
+    match = SELECT_LIMIT_PATTERN.search(statement)
+    if not match:
+        return None
+    value = match.group(1)
+    if not value.isdigit():
+        return None
+    return int(value)
 
 
 def extract_table_refs(sql: str) -> list[str]:
@@ -527,9 +644,9 @@ def extract_table_refs(sql: str) -> list[str]:
     result: list[str] = []
     describe_match = DESCRIBE_PATTERN.search(normalized)
     if describe_match:
-        result.append(normalize_table_ref(describe_match.group(1)))
+        result.append(describe_match.group(1).replace("`", ""))
     for match in TABLE_REF_PATTERN.finditer(normalized):
-        table = normalize_table_ref(match.group(1))
+        table = match.group(1).replace("`", "")
         if table not in result:
             result.append(table)
     return result
@@ -557,7 +674,7 @@ def sql_summary(sql: str) -> str:
     return compact
 
 
-def print_query_log(env_name: str, database: str, tables: list[str], sql: str, note: str | None, host: str | None = None) -> None:
+def print_query_log(env_name: str, database: str, tables: list[str], sql: str, note: str | None) -> None:
     payload = {
         "event": "ai-db-query-log",
         "env": env_name,
@@ -565,8 +682,6 @@ def print_query_log(env_name: str, database: str, tables: list[str], sql: str, n
         "tables": tables,
         "summary": sql_summary(sql),
     }
-    if host:
-        payload["host"] = host
     if note:
         payload["note"] = note
     print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
@@ -596,15 +711,30 @@ def cursor_execute(cur: Any, sql: str, params: Any) -> None:
         cur.execute(sql, params)
 
 
+def query_cursor(conn: Any) -> Any:
+    try:
+        return conn.cursor(buffered=False)
+    except TypeError:
+        return conn.cursor()
+
+
 def rows_to_dicts(cur: Any, rows: list[Any]) -> list[dict[str, Any]]:
     columns = [col[0] for col in cur.description]
-    return [{columns[idx]: value for idx, value in enumerate(row)} for row in rows]
+    return [
+        {
+            columns[idx]: value[: MAX_CELL_CHARS - 3] + "..."
+            if isinstance(value, str) and len(value) > MAX_CELL_CHARS
+            else value
+            for idx, value in enumerate(row)
+        }
+        for row in rows
+    ]
 
 
-def print_table(rows: list[dict[str, Any]]) -> None:
+def render_table(rows: list[dict[str, Any]]) -> str:
     if not rows:
-        print("(no rows)")
-        return
+        return "(no rows)"
+    output = io.StringIO()
     columns = list(rows[0].keys())
     widths = {col: len(str(col)) for col in columns}
     rendered_rows: list[dict[str, str]] = []
@@ -618,67 +748,116 @@ def print_table(rows: list[dict[str, Any]]) -> None:
             rendered[col] = text
             widths[col] = min(max(widths[col], len(text)), 200)
         rendered_rows.append(rendered)
-    print(" | ".join(str(col).ljust(widths[col]) for col in columns))
-    print("-+-".join("-" * widths[col] for col in columns))
+    output.write(" | ".join(str(col).ljust(widths[col]) for col in columns) + "\n")
+    output.write("-+-".join("-" * widths[col] for col in columns) + "\n")
     for row in rendered_rows:
-        print(" | ".join(row[col].ljust(widths[col]) for col in columns))
+        output.write(" | ".join(row[col].ljust(widths[col]) for col in columns) + "\n")
+    return output.getvalue().rstrip()
 
 
-def print_rows(rows: list[dict[str, Any]], fmt: str) -> None:
+def render_rows(rows: list[dict[str, Any]], fmt: str) -> str:
     if fmt == "json":
-        print(json.dumps(rows, ensure_ascii=False, indent=2, default=str))
-    elif fmt == "csv":
-        if not rows:
-            return
-        writer = csv.DictWriter(sys.stdout, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
-    else:
-        print_table(rows)
+        return json.dumps(rows, ensure_ascii=False, separators=(",", ":"), default=str)
+    return render_table(rows)
+
+
+def fit_rows_to_output_budget(
+    rows: list[dict[str, Any]], fmt: str, max_output_bytes: int
+) -> tuple[list[dict[str, Any]], bool]:
+    lower = 0
+    upper = len(rows)
+    while lower < upper:
+        middle = (lower + upper + 1) // 2
+        if len(render_rows(rows[:middle], fmt).encode("utf-8")) <= max_output_bytes:
+            lower = middle
+        else:
+            upper = middle - 1
+    return rows[:lower], lower < len(rows)
+
+
+def print_result_log(
+    env_name: str,
+    database: str,
+    row_count: int,
+    limit: int,
+    has_more: bool,
+    output_truncated: bool,
+    sql_limit: int | None,
+) -> None:
+    payload = {
+        "event": "ai-db-result",
+        "env": env_name,
+        "database": database,
+        "rows": row_count,
+        "limit": limit,
+        "has_more": has_more,
+        "output_truncated": output_truncated,
+        "sql_limit": sql_limit,
+    }
+    print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
 
 
 def command_init_store(args: argparse.Namespace) -> None:
     store_dir = Path(args.store_dir)
-    store_dir.mkdir(parents=True, exist_ok=True)
-    index = load_index(store_dir, create=True)
-    save_index(store_dir, index)
-    (store_dir / "envs").mkdir(parents=True, exist_ok=True)
+    with store_write_lock(store_dir):
+        index = load_index(store_dir, create=True)
+        save_index(store_dir, index)
+        (store_dir / "envs").mkdir(parents=True, exist_ok=True)
     print(f"Initialized ai-db store: {store_dir}")
 
 
 def command_create_env(args: argparse.Namespace) -> None:
     store_dir = Path(args.store_dir)
-    validate_env_name(args.env)
-    index = load_index(store_dir, create=True)
-    env_path = env_file_for(store_dir, args.env)
-    if args.from_json:
-        spec = parse_json_object(args.from_json, "connection")
-    elif args.from_file:
-        spec = read_json(Path(args.from_file))
-    else:
-        spec = mysql_template(args.env)
-    spec = ensure_mysql_spec(spec)
-    if env_path.exists() and not args.force:
-        raise SystemExit(f"Environment file already exists: {env_path}. Use --force to overwrite.")
-    write_json(env_path, spec)
-    index["environments"][args.env] = {"file": str(env_path.relative_to(store_dir)).replace("\\", "/")}
-    if args.default or not index.get("default_env"):
-        index["default_env"] = args.env
-    save_index(store_dir, index)
+    with store_write_lock(store_dir):
+        validate_env_name(args.env)
+        index = load_index(store_dir, create=True)
+        env_path = env_file_for(store_dir, args.env)
+        if args.from_json:
+            spec = parse_json_object(args.from_json, "connection")
+        elif args.from_file:
+            spec = read_json(Path(args.from_file))
+        else:
+            spec = mysql_template(args.env)
+        spec = ensure_mysql_spec(spec)
+        if env_path.exists() and not args.force:
+            raise SystemExit(f"Environment file already exists: {env_path}. Use --force to overwrite.")
+        previous_env = env_path.read_bytes() if env_path.exists() else None
+        env_written = False
+        try:
+            write_json(env_path, spec)
+            env_written = True
+            index["environments"][args.env] = {"file": str(env_path.relative_to(store_dir)).replace("\\", "/")}
+            if args.default or not index.get("default_env"):
+                index["default_env"] = args.env
+            save_index(store_dir, index)
+        except Exception:
+            if env_written:
+                if previous_env is None:
+                    env_path.unlink()
+                else:
+                    write_bytes(env_path, previous_env)
+            raise
     print(json.dumps({"created": args.env, "file": str(env_path), "default": index.get("default_env")}, ensure_ascii=False))
 
 
 def command_list_envs(args: argparse.Namespace) -> None:
     store_dir = Path(args.store_dir)
     index = load_index(store_dir)
-    print_rows(env_summary_rows(store_dir, index), args.format)
+    if args.names:
+        rows = [
+            {"env": env, "default": env == index.get("default_env")}
+            for env in sorted(index["environments"])
+        ]
+        print(json.dumps(rows, ensure_ascii=False, separators=(",", ":")))
+        return
+    print(render_rows(env_summary_rows(store_dir, index), args.format))
 
 
 def command_resolve_env(args: argparse.Namespace) -> None:
     """Decide which environment to use: explicit context preference first, then git branch.
 
-    Emits a JSON decision (never guesses): method=prefer|branch|branch-ambiguous|none,
-    env when uniquely resolved, matched candidates, and the full env summary list.
+    Emits a compact JSON decision (never guesses): method=prefer|branch|branch-ambiguous|none,
+    env when uniquely resolved, matched candidates, and a next-step hint.
     """
     store_dir = Path(args.store_dir)
     index = load_index_optional(store_dir)
@@ -688,7 +867,6 @@ def command_resolve_env(args: argparse.Namespace) -> None:
         "branch": None,
         "prefer": args.prefer,
         "matches": [],
-        "environments": [],
         "hint": None,
     }
     if index is None:
@@ -699,7 +877,6 @@ def command_resolve_env(args: argparse.Namespace) -> None:
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
         return
     envs = sorted(index["environments"])
-    payload["environments"] = env_summary_rows(store_dir, index)
     if args.prefer:
         if args.prefer in index["environments"]:
             payload.update({"method": "prefer", "env": args.prefer})
@@ -728,48 +905,21 @@ def command_resolve_env(args: argparse.Namespace) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
 
 
-def command_status(args: argparse.Namespace) -> None:
-    """One-shot environment judgment for skill load: store state, git branch, resolved envs."""
-    store_dir = Path(args.store_dir)
-    index = load_index_optional(store_dir)
-    payload: dict[str, Any] = {
-        "store_dir": str(store_dir),
-        "initialized": index is not None,
-        "git_branch": args.branch or git_current_branch(),
-        "default_env": None,
-        "matches": None,
-        "environments": [],
-        "hint": None,
-    }
-    if index is None:
-        payload["hint"] = (
-            f"Store not initialized at {store_dir}. Run: python <db-query> init-store"
-        )
-        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
-        return
-    payload["default_env"] = index.get("default_env")
-    payload["environments"] = env_summary_rows(store_dir, index)
-    if payload["git_branch"]:
-        matches = match_env_by_branch(payload["git_branch"], sorted(index["environments"]))
-        if matches:
-            payload["matches"] = [{"env": env, "score": score} for env, score in matches]
-    print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
-
-
 def command_show_env(args: argparse.Namespace) -> None:
-    env_name, path, spec = load_env_spec(Path(args.store_dir), args.env)
+    env_name, path, spec = load_env_spec(Path(args.store_dir), args.env, resolve_values=False)
     payload = {"env": env_name, "file": str(path), "connection": redact(spec)}
     print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
 
 
 def command_set_default(args: argparse.Namespace) -> None:
     store_dir = Path(args.store_dir)
-    validate_env_name(args.env)
-    index = load_index(store_dir)
-    if args.env not in index["environments"]:
-        raise SystemExit(f"Environment not found: {args.env}")
-    index["default_env"] = args.env
-    save_index(store_dir, index)
+    with store_write_lock(store_dir):
+        validate_env_name(args.env)
+        index = load_index(store_dir)
+        if args.env not in index["environments"]:
+            raise SystemExit(f"Environment not found: {args.env}")
+        index["default_env"] = args.env
+        save_index(store_dir, index)
     print(json.dumps({"default_env": args.env}, ensure_ascii=False))
 
 
@@ -795,22 +945,46 @@ def command_query(args: argparse.Namespace) -> None:
     sql = load_sql(args)
     if not is_query_only(sql):
         raise SystemExit("SQL is not recognized as query-only. ai-db query only runs SELECT/SHOW/EXPLAIN/DESCRIBE statements.")
+    if args.limit < 1:
+        raise SystemExit("--limit must be at least 1.")
+    if args.max_output_bytes < 1:
+        raise SystemExit("--max-output-bytes must be at least 1.")
+    limit = min(args.limit, MAX_LIMIT)
+    max_output_bytes = min(args.max_output_bytes, MAX_OUTPUT_BYTES)
+    validate_select_limit(sql, limit)
     spec = ensure_mysql_spec(apply_database_override(spec, args.database))
     tables = resolve_tables(sql, args.tables)
-    print_query_log(env_name, spec["database"], tables, sql, args.log_note, spec.get("host"))
-    limit = max(0, min(args.limit, MAX_LIMIT))
+    print_query_log(env_name, spec["database"], tables, sql, args.log_note)
     if args.limit > MAX_LIMIT:
         print(f"warning: --limit {args.limit} exceeds MAX_LIMIT={MAX_LIMIT}; using {limit}", file=sys.stderr)
+    if args.max_output_bytes > MAX_OUTPUT_BYTES:
+        print(
+            f"warning: --max-output-bytes {args.max_output_bytes} exceeds "
+            f"MAX_OUTPUT_BYTES={MAX_OUTPUT_BYTES}; using {max_output_bytes}",
+            file=sys.stderr,
+        )
     conn = None
     try:
         conn = connect_mysql(spec)
-        cur = conn.cursor()
+        cur = query_cursor(conn)
         cursor_execute(cur, sql, load_params(args.params))
         if cur.description:
-            rows = cur.fetchmany(limit)
+            rows = cur.fetchmany(limit + 1)
+            has_more = len(rows) > limit
             result = rows_to_dicts(cur, rows)
-            print_rows(result, args.format)
-            print(f"-- env={env_name} database={spec['database']} driver=mysql rows={len(result)} limit={limit}", file=sys.stderr)
+            result = result[:limit]
+            result, output_truncated = fit_rows_to_output_budget(result, args.format, max_output_bytes)
+            has_more = has_more or output_truncated
+            print(render_rows(result, args.format))
+            print_result_log(
+                env_name,
+                spec["database"],
+                len(result),
+                limit,
+                has_more,
+                output_truncated,
+                extract_sql_limit(sql),
+            )
         else:
             conn.rollback()
             raise SystemExit("Query completed without a result set; ai-db does not run data-changing statements.")
@@ -853,7 +1027,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_envs = sub.add_parser("list-envs", help="List environments without secrets.")
     add_store_arg(list_envs)
-    list_envs.add_argument("--format", choices=["table", "json", "csv"], default="table")
+    list_envs.add_argument("--format", choices=["table", "json"], default="table")
+    list_envs.add_argument("--names", action="store_true", help="Return only environment names and default markers.")
     list_envs.set_defaults(func=command_list_envs)
 
     resolve_env = sub.add_parser(
@@ -864,11 +1039,6 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_env.add_argument("--prefer", help="Environment previously used or inferred in this session context.")
     resolve_env.add_argument("--branch", help="Git branch name to infer from; defaults to auto-detection in the current directory.")
     resolve_env.set_defaults(func=command_resolve_env)
-
-    status = sub.add_parser("status", help="One-shot environment judgment: store state, git branch, and env summary.")
-    add_store_arg(status)
-    status.add_argument("--branch", help="Git branch name to infer from; defaults to auto-detection in the current directory.")
-    status.set_defaults(func=command_status)
 
     show_env = sub.add_parser("show-env", help="Show one environment with secrets redacted.")
     add_store_arg(show_env)
@@ -894,7 +1064,13 @@ def build_parser() -> argparse.ArgumentParser:
     query.add_argument("--tables", help="Comma-separated table names determined from code/context/entity classes.")
     query.add_argument("--log-note", help="Brief query purpose for the ai-db query log.")
     query.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="Maximum rows to fetch.")
-    query.add_argument("--format", choices=["table", "json", "csv"], default="table")
+    query.add_argument(
+        "--max-output-bytes",
+        type=int,
+        default=DEFAULT_MAX_OUTPUT_BYTES,
+        help="Maximum UTF-8 bytes emitted to stdout.",
+    )
+    query.add_argument("--format", choices=["table", "json"], default="table")
     query.set_defaults(func=command_query)
 
     return parser
@@ -908,9 +1084,26 @@ def main() -> int:
             "then re-run this command."
         )
     parser = build_parser()
-    args = parser.parse_args()
-    args.func(args)
-    return 0
+    try:
+        args = parser.parse_args()
+        args.func(args)
+        return 0
+    except SystemExit as exc:
+        if isinstance(exc.code, str):
+            print(
+                json.dumps(
+                    {
+                        "event": "ai-db-error",
+                        "code": "COMMAND_FAILED",
+                        "message": exc.code,
+                        "action": "Fix the input or follow the command in message, then retry.",
+                    },
+                    ensure_ascii=False,
+                ),
+                file=sys.stderr,
+            )
+            return 1
+        raise
 
 
 if __name__ == "__main__":

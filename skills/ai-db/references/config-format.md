@@ -103,19 +103,31 @@ python <db-query> query --url "mysql://user@127.0.0.1:3306/app" --database app -
 ## Environment Resolution
 
 The decision order (session context → git branch → ask the user) is defined once in `SKILL.md`
-（环境选择优先级）. `status` is a one-shot environment judgment for skill load: store
-initialization state, current git branch, branch-inferred candidates, default env, and
-secret-free env summaries. Both `status` and `resolve-env` only read the store and git;
-they never connect to MySQL.
+（环境选择优先级）. `resolve-env` reads only the store and git; it never connects to MySQL.
+It returns a unique environment or candidate names for the caller to resolve.
 
 ## Commands
 
 `query` only accepts query-oriented SQL such as `SELECT`, `SHOW`, `EXPLAIN`,
 `DESCRIBE`, and `DESC`. It has no write override flag and prints `ai-db-query-log`
-(database, table names, short SQL summary) to stderr. The examples pass
+(database, table names, short SQL summary) and `ai-db-result` (returned rows and
+truncation metadata) to stderr. The examples pass
 `--database`/`--tables`/`--log-note` because SKILL.md（强制快速路由）requires them for every query.
 `--file <utf8-sql-file>` reads SQL from a file, `--params <json>` executes it
-parameterized (placeholder `%s`), and `--format json|csv|table` selects the output.
+parameterized (placeholder `%s`), and `--format json|table` selects the output.
+Every `SELECT` must end with an explicit `LIMIT` no larger than `--limit` (a
+trailing semicolon is accepted). The defaults
+are `--limit 20` and `--max-output-bytes 65536`; result metadata tells the caller when
+either bound truncates output. `ai-db-result.sql_limit` carries the literal `LIMIT`
+value of the SELECT (or `null` for a parameterized `LIMIT %s` / non-SELECT statements):
+when `rows` equals `limit`, the server-side `LIMIT` may hide more rows and
+`has_more` cannot detect them, so verify with `count(*)` before claiming completeness.
+
+SQL shape limits (conservative by design): the statement must start with
+`select`/`show`/`explain`/`describe`/`desc`; CTE (`WITH ...`), parenthesized queries,
+and the two-argument `LIMIT <offset>, <count>` form are rejected — rewrite them as a
+single trailing `LIMIT <count> [OFFSET <offset>]` on the outermost level without
+changing the query semantics.
 
 Resolve `<db-query>` from the current loaded `ai-db` skill root:
 `<ai-db-skill>/scripts/db_query.py`. Do not hard-code a user-specific skill
@@ -123,13 +135,13 @@ installation path in reusable prompts or docs.
 
 ```powershell
 python <db-query> init-store
-python <db-query> status
 python <db-query> resolve-env
 python <db-query> resolve-env --prefer stable
 python <db-query> resolve-env --branch "feature/18beta1"
 python <db-query> create-env --env 18beta.1-dev
 python <db-query> create-env --env stable --from-file <connection-json-file> --default --force
 python <db-query> create-env --env stable --from-json "{\"driver\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3306,\"database\":\"app\",\"user\":\"root\",\"password\":\"${ENV:MYSQL_PASSWORD}\"}" --default --force
+python <db-query> list-envs --names
 python <db-query> list-envs --format json
 python <db-query> show-env --env stable
 python <db-query> show-env --env @default
@@ -138,6 +150,5 @@ python <db-query> test --env stable
 python <db-query> query --env stable --database app --tables "<schema-metadata>" --log-note "查看主库表清单" --sql "show tables" --limit 50
 python <db-query> query --env stable --database app --tables users --log-note "查看用户表结构" --sql "describe users"
 python <db-query> query --env stable --database app --tables users --log-note "按实体映射抽样查询用户" --sql "select * from users limit 5" --format json
-python <db-query> query --env stable --database app --tables users --log-note "按实体映射参数化查询用户" --sql "select * from users where id = %s" --params "[1]" --format json
-python <db-query> query --env stable --database app --tables users --log-note "按实体映射导出用户数据" --file .\users.sql --format csv
+python <db-query> query --env stable --database app --tables users --log-note "按实体映射参数化查询用户" --sql "select * from users where id = %s limit 1" --params "[1]" --format json
 ```

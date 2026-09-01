@@ -55,17 +55,17 @@ pip install pymysql -i https://mirrors.aliyun.com/pypi/simple/
 Windows 必须统一通过 `scripts/python_probe.ps1` 探测启动器执行，它会跳过 Microsoft Store 占位程序，自动选择 Python 3.7+：
 
 ```powershell
-powershell .\scripts\python_probe.ps1 status
+powershell .\scripts\python_probe.ps1 resolve-env
 ```
 
 若 ExecutionPolicy 限制直接执行脚本（如 `Restricted`），用 `-ExecutionPolicy Bypass` 调用：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\python_probe.ps1 status
+powershell -ExecutionPolicy Bypass -File .\scripts\python_probe.ps1 resolve-env
 ```
 
 若未发现 Python 3.7+，启动器会直接要求先安装（提示信息含国内镜像地址）。其余平台直接使用：
 
 ```powershell
-python .\scripts\db_query.py status
+python .\scripts\db_query.py resolve-env
 ```
