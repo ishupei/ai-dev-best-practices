@@ -6,10 +6,11 @@
 # 功能:
 #   1. 从中心仓库 skills/ 同步 Claude Code skills 到全局 (~/.claude/skills/)
 #   2. 从中心仓库 skills/ 同步 ZCode skills 到全局 (~/.zcode/skills/)
-#   3. 从中心仓库 skills/ 同步到目标项目（Cursor / Trae）
+#   3. 从中心仓库 skills/ 同步 Codex skills 到全局 (~/.codex/skills/)
+#   4. 从中心仓库 skills/ 同步到目标项目（Cursor / Trae）
 #
 # 示例:
-#   bash sync-skills.sh                          # 同步 Claude Code + ZCode 全局
+#   bash sync-skills.sh                          # 同步 Claude Code + ZCode + Codex 全局
 #   bash sync-skills.sh --target ~/my-project    # 同步到指定项目
 #   bash sync-skills.sh --target all             # 同步到所有已注册项目
 # ============================================================
@@ -100,7 +101,37 @@ sync_zcode_global() {
     echo "  共同步 $count 个技能目录到 $zcode_skills_global"
 }
 
-# ---- 3. 同步 Cursor/Trae skills 到目标项目 ----
+# ---- 3. 从中心仓库同步 Codex 全局 skills ----
+sync_codex_global() {
+    local codex_skills_global="$HOME/.codex/skills"
+    mkdir -p "$codex_skills_global"
+
+    echo ""
+    echo "=== 同步 Codex 全局 Skills ==="
+
+    local src_skills="$SOURCE_DIR/skills"
+    if [ ! -d "$src_skills" ]; then
+        log_warn "未找到 $src_skills，跳过 Codex 同步"
+        return
+    fi
+
+    local count=0
+    for d in "$src_skills"/*/; do
+        [ -d "$d" ] || continue
+        local skill_name=$(basename "$d")
+        [ -f "$d/SKILL.md" ] || continue
+        local dest_dir="$codex_skills_global/$skill_name"
+        rm -rf "$dest_dir"
+        mkdir -p "$codex_skills_global"
+        copy_skill_dir "$d" "$dest_dir"
+        log_ok "  $skill_name"
+        ((count++)) || true
+    done
+
+    echo "  共同步 $count 个技能目录到 $codex_skills_global"
+}
+
+# ---- 4. 同步 Cursor/Trae skills 到目标项目 ----
 sync_project_targets() {
     local target="$1"
 
@@ -149,7 +180,7 @@ sync_project_targets() {
 
 }
 
-# ---- 4. 注册项目 ----
+# ---- 5. 注册项目 ----
 register_target() {
     local target="$1"
     target="${target/#\~/$HOME}"
@@ -163,7 +194,7 @@ register_target() {
     fi
 }
 
-# ---- 5. 同步所有已注册项目 ----
+# ---- 6. 同步所有已注册项目 ----
 sync_all_registered() {
     if [ ! -f "$REGISTRY_FILE" ]; then
         log_warn "暂无已注册项目。使用 --register <路径> 添加项目。"
@@ -183,9 +214,10 @@ main() {
     echo "  中心仓库: $SOURCE_DIR"
     echo "============================================"
 
-    # 始终同步 Claude Code 与 ZCode 全局 skills
+    # 始终同步 Claude Code、ZCode 与 Codex 全局 skills
     sync_claude_global
     sync_zcode_global
+    sync_codex_global
 
     # 解析参数
     while [[ $# -gt 0 ]]; do
@@ -217,7 +249,7 @@ main() {
             --help|-h)
                 echo ""
                 echo "用法:"
-                echo "  bash sync-skills.sh                          # 同步 Claude Code + ZCode 全局"
+                echo "  bash sync-skills.sh                          # 同步 Claude Code + ZCode + Codex 全局"
                 echo "  bash sync-skills.sh --target ~/project       # 同步到指定项目"
                 echo "  bash sync-skills.sh --target all              # 同步到所有已注册项目"
                 echo "  bash sync-skills.sh --register ~/project     # 注册一个项目"

@@ -6,10 +6,11 @@
 #   1. 从中心仓库 skills/ 同步 Claude Code skills 到全局 (~/.claude/skills/)
 #   2. 从中心仓库 skills/ 同步 Cursor skills 到全局 (~/.cursor/skills/)
 #   3. 从中心仓库 skills/ 同步 ZCode skills 到全局 (~/.zcode/skills/)
-#   4. 从中心仓库 skills/ 同步到目标项目（Cursor / Trae）
+#   4. 从中心仓库 skills/ 同步 Codex skills 到全局 (~/.codex/skills/)
+#   5. 从中心仓库 skills/ 同步到目标项目（Cursor / Trae）
 #
 # 示例:
-#   .\sync-skills.ps1                                    # 同步全局 (Claude + Cursor + ZCode)
+#   .\sync-skills.ps1                                    # 同步全局 (Claude + Cursor + ZCode + Codex)
 #   .\sync-skills.ps1 -Target D:\work\my-project         # 同步到指定项目
 #   .\sync-skills.ps1 -Target all                        # 同步到所有已注册项目
 #   .\sync-skills.ps1 -Register D:\work\my-project       # 注册一个项目
@@ -133,7 +134,38 @@ function Sync-ZCodeGlobal {
     Write-Host "  共同步 $($skillDirs.Count) 个技能目录到 $zcodeSkillsGlobal"
 }
 
-# ---- 4. 同步 Cursor / Trae 到目标项目 ----
+# ---- 4. 从中心仓库同步 Codex 全局 skills ----
+function Sync-CodexGlobal {
+    $codexSkillsGlobal = Join-Path $env:USERPROFILE ".codex\skills"
+    if (-not (Test-Path $codexSkillsGlobal)) {
+        New-Item -ItemType Directory -Path $codexSkillsGlobal -Force | Out-Null
+    }
+
+    Write-Host ""
+    Write-Host "=== 同步 Codex 全局 Skills ==="
+
+    $sourceSkills = Join-Path $SourceDir "skills"
+    if (-not (Test-Path $sourceSkills -PathType Container)) {
+        Log-Warn "未找到 $sourceSkills，跳过 Codex 同步"
+        return
+    }
+
+    $skillDirs = Get-ChildItem -Path $sourceSkills -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path (Join-Path $_.FullName "SKILL.md") }
+
+    foreach ($d in $skillDirs) {
+        $targetDir = Join-Path $codexSkillsGlobal $d.Name
+        if (Test-Path $targetDir) {
+            Remove-Item $targetDir -Recurse -Force
+        }
+        Copy-SkillDir $d.FullName $targetDir
+        Log-Ok "  $($d.Name)"
+    }
+
+    Write-Host "  共同步 $($skillDirs.Count) 个技能目录到 $codexSkillsGlobal"
+}
+
+# ---- 5. 同步 Cursor / Trae 到目标项目 ----
 function Sync-ProjectTargets($targetPath) {
     if (-not (Test-Path $targetPath -PathType Container)) {
         Log-Err "目标项目不存在: $targetPath"
@@ -174,7 +206,7 @@ function Sync-ProjectTargets($targetPath) {
     }
 }
 
-# ---- 5. 注册项目 ----
+# ---- 6. 注册项目 ----
 function Register-Target($targetPath) {
     $resolved = (Resolve-Path $targetPath).Path
 
@@ -186,7 +218,7 @@ function Register-Target($targetPath) {
     }
 }
 
-# ---- 6. 同步所有已注册项目 ----
+# ---- 7. 同步所有已注册项目 ----
 function Sync-AllRegistered {
     if (-not (Test-Path $RegistryFile)) {
         Log-Warn "暂无已注册项目。使用 -Register <路径> 添加项目。"
@@ -208,7 +240,7 @@ function Main {
     if ($Help) {
         Write-Host ""
         Write-Host "用法:"
-        Write-Host "  .\sync-skills.ps1                                # 同步全局 (Claude + Cursor + ZCode)"
+        Write-Host "  .\sync-skills.ps1                                # 同步全局 (Claude + Cursor + ZCode + Codex)"
         Write-Host "  .\sync-skills.ps1 -Target D:\work\project        # 同步到指定项目"
         Write-Host "  .\sync-skills.ps1 -Target all                    # 同步到所有已注册项目"
         Write-Host "  .\sync-skills.ps1 -Register D:\work\project      # 注册一个项目"
@@ -220,6 +252,7 @@ function Main {
     Sync-ClaudeGlobal
     Sync-CursorGlobal
     Sync-ZCodeGlobal
+    Sync-CodexGlobal
 
     # 处理注册
     if ($Register) {
