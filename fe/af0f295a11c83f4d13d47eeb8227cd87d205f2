@@ -1,0 +1,25 @@
+skills/ai-db/references/config-format.md
+  s_cc489071f37d77::t_d0134f49a9c452 51-53,135
+skills/ai-db/references/setup.md
+  s_cc489071f37d77::t_e9306361b23900 61-66
+skills/ai-db/scripts/db_query.py
+  s_cc489071f37d77::t_713b5a877e9df5 300-305,397-410,432-438,440,740,755
+skills/ai-db/tests/test_db_query.py
+  s_cc489071f37d77::t_cd89d5251e7178 1-230
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "feaf0f295a11c83f4d13d47eeb8227cd87d205f2",
+  "prompts": {},
+  "sessions": {
+    "s_cc489071f37d77": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05b2f-2eeb-7b22-82a4-485a23416359",
+        "model": "unknown"
+      },
+      "human_author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
