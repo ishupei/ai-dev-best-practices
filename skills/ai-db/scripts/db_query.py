@@ -297,6 +297,12 @@ def spec_from_mysql_url(url: str) -> dict[str, Any]:
     if scheme not in {"mysql", "mariadb"}:
         raise SystemExit("Only mysql:// or mariadb:// URLs are supported.")
     query = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
+    if parsed.password is not None:
+        print(
+            "warning: --url carries a password; prefer --direct-json with ${ENV:NAME} "
+            "so the secret is not exposed in process lists or logs",
+            file=sys.stderr,
+        )
     spec: dict[str, Any] = {
         "driver": "mysql",
         "host": parsed.hostname,
@@ -388,6 +394,20 @@ def driver_install_hint() -> str:
     return 'pip install "pymysql>=1.1,<2"'
 
 
+# mysql.connector does not accept pymysql-only timeout kwargs; the fallback
+# call is filtered down to the parameter set shared by both drivers.
+MYSQL_CONNECTOR_KWARGS = {
+    "host",
+    "port",
+    "database",
+    "user",
+    "password",
+    "charset",
+    "connect_timeout",
+    "autocommit",
+}
+
+
 def connect_mysql(spec: dict[str, Any]) -> Any:
     spec = ensure_mysql_spec(spec)
     kwargs = {
@@ -407,17 +427,17 @@ def connect_mysql(spec: dict[str, Any]) -> Any:
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
     try:
         pymysql = importlib.import_module("pymysql")
-        kwargs.pop("cursorclass", None)
         return pymysql.connect(**kwargs)
     except ImportError:
-        print(
-            f"pymysql is not installed; falling back to mysql.connector. "
-            f"To use pymysql, run: {driver_install_hint()}",
-            file=sys.stderr,
-        )
+        fallback_kwargs = {k: v for k, v in kwargs.items() if k in MYSQL_CONNECTOR_KWARGS}
+        dropped = sorted(set(kwargs) - set(fallback_kwargs))
+        message = "pymysql is not installed; falling back to mysql.connector."
+        if dropped:
+            message += f" Dropped pymysql-only options: {', '.join(dropped)}."
+        message += f" To use pymysql, run: {driver_install_hint()}"
+        print(message, file=sys.stderr)
         mysql_connector = require_module("mysql.connector", "mysql-connector-python")
-        kwargs.pop("cursorclass", None)
-        return mysql_connector.connect(**kwargs)
+        return mysql_connector.connect(**fallback_kwargs)
 
 
 def normalized_sql(sql: str) -> str:
@@ -717,7 +737,7 @@ def command_status(args: argparse.Namespace) -> None:
         "initialized": index is not None,
         "git_branch": args.branch or git_current_branch(),
         "default_env": None,
-        "branch_env": None,
+        "matches": None,
         "environments": [],
         "hint": None,
     }
@@ -732,7 +752,7 @@ def command_status(args: argparse.Namespace) -> None:
     if payload["git_branch"]:
         matches = match_env_by_branch(payload["git_branch"], sorted(index["environments"]))
         if matches:
-            payload["branch_env"] = [{"env": env, "score": score} for env, score in matches]
+            payload["matches"] = [{"env": env, "score": score} for env, score in matches]
     print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
 
 

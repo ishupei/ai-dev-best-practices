@@ -48,8 +48,9 @@ ai-db/
 }
 ```
 
-Environment names must contain only letters, digits, dots, underscores, and hyphens. Examples:
-`18beta.1-dev`, `stable`, `uat_2`.
+Environment names must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`: letters, digits,
+dots, underscores, and hyphens, starting with a letter or digit, at most 128 characters.
+Examples: `18beta.1-dev`, `stable`, `uat_2`.
 
 ## Single Environment Connection JSON
 
@@ -131,6 +132,7 @@ python <db-query> create-env --env stable --from-file <connection-json-file> --d
 python <db-query> create-env --env stable --from-json "{\"driver\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3306,\"database\":\"app\",\"user\":\"root\",\"password\":\"${ENV:MYSQL_PASSWORD}\"}" --default --force
 python <db-query> list-envs --format json
 python <db-query> show-env --env stable
+python <db-query> show-env --env @default
 python <db-query> set-default --env stable
 python <db-query> test --env stable
 python <db-query> query --env stable --database app --tables "<schema-metadata>" --log-note "查看主库表清单" --sql "show tables" --limit 50
