@@ -102,6 +102,31 @@ class IsQueryOnlyTest(unittest.TestCase):
         self.assertFalse(db_query.is_query_only("/* note */ update users set name = 'x'"))
         self.assertTrue(db_query.is_query_only("/* note */ select 1"))
 
+    def test_show_create_table_allowed(self):
+        for sql in (
+            "show create table users",
+            "show create view user_stats",
+            "show create database app",
+        ):
+            self.assertTrue(db_query.is_query_only(sql), sql)
+
+    def test_explain_with_dml_still_rejected(self):
+        self.assertFalse(db_query.is_query_only("explain delete from users"))
+        self.assertFalse(db_query.is_query_only("explain update users set name = 'x'"))
+
+    def test_hash_comments_ignored(self):
+        self.assertTrue(db_query.is_query_only("select 1 # trailing note"))
+        self.assertTrue(db_query.is_query_only("select * from users # note with drop"))
+        self.assertFalse(db_query.is_query_only("# note\ndelete from users"))
+        self.assertTrue(db_query.is_query_only("# note\nselect 1 limit 5"))
+        db_query.validate_select_limit("select * from users limit 5 # note", 20)
+        self.assertEqual(db_query.extract_sql_limit("select * from users limit 5 # note"), 5)
+
+    def test_limit_error_reports_effective_limit(self):
+        with self.assertRaises(SystemExit) as ctx:
+            db_query.validate_select_limit("select * from users limit 600", 500)
+        self.assertIn("500", str(ctx.exception))
+
 
 class CommandQueryGuardTest(unittest.TestCase):
     def test_rejected_statement_never_connects(self):
@@ -144,6 +169,38 @@ class ListEnvsCommandTest(unittest.TestCase):
             [{"env": "stable", "default": True}, {"env": "uat", "default": False}],
         )
 
+    def test_corrupt_env_file_does_not_fail_listing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store_dir = Path(directory)
+            db_query.write_json(
+                db_query.index_path(store_dir),
+                {
+                    "default_env": "good",
+                    "environments": {
+                        "good": {"file": "envs/good.json"},
+                        "bad": {"file": "envs/bad.json"},
+                    },
+                },
+            )
+            (store_dir / "envs").mkdir()
+            db_query.write_json(
+                store_dir / "envs" / "good.json",
+                {"host": "h", "database": "d", "user": "u"},
+            )
+            (store_dir / "envs" / "bad.json").write_text("{ not json", encoding="utf-8")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                db_query.command_list_envs(
+                    SimpleNamespace(store_dir=str(store_dir), names=False, format="json")
+                )
+        rows = json.loads(stdout.getvalue())
+        self.assertEqual(len(rows), 2)
+        good, bad = rows[0], rows[1]
+        self.assertEqual(good["env"], "good")
+        self.assertNotIn("error", good)
+        self.assertEqual(bad["env"], "bad")
+        self.assertIn("error", bad)
+
 
 class StoreWriteTest(unittest.TestCase):
     def test_write_json_replaces_content_without_temp_files(self):
@@ -180,9 +237,6 @@ class ShowEnvCommandTest(unittest.TestCase):
 
 
 class ResolveTablesTest(unittest.TestCase):
-    def test_show_uses_schema_metadata_placeholder(self):
-        self.assertEqual(db_query.resolve_tables("show tables", None), ["<schema-metadata>"])
-
     def test_show_with_table_extracts_name(self):
         self.assertEqual(db_query.extract_table_refs("show create table users"), ["users"])
         self.assertEqual(db_query.extract_table_refs("show create view user_stats"), ["user_stats"])
@@ -199,6 +253,22 @@ class ResolveTablesTest(unittest.TestCase):
             "select u.id from users u join orders o on o.user_id = u.id", None
         )
         self.assertEqual(tables, ["users", "orders"])
+
+    def test_comments_and_strings_do_not_leak_table_names(self):
+        self.assertEqual(
+            db_query.extract_table_refs(
+                "select * from users u -- join orders o on o.user_id = u.id\n"
+                " where u.active = 1 limit 5"
+            ),
+            ["users"],
+        )
+        self.assertEqual(
+            db_query.extract_table_refs("select 'from orders' as note, * from users limit 5"),
+            ["users"],
+        )
+
+    def test_backtick_table_names_extracted(self):
+        self.assertEqual(db_query.extract_table_refs("select * from `users` limit 5"), ["users"])
 
     def test_explicit_tables_win(self):
         self.assertEqual(
@@ -244,6 +314,10 @@ class MatchEnvByBranchTest(unittest.TestCase):
     def test_containment_scores_80(self):
         matches = db_query.match_env_by_branch("release/18beta.1-dev", ["18beta.1-dev"])
         self.assertEqual(matches, [("18beta.1-dev", 80)])
+
+    def test_token_match_is_not_exact(self):
+        matches = db_query.match_env_by_branch("release/18beta.1-dev", ["dev", "18beta.1-dev"])
+        self.assertEqual(matches, [("18beta.1-dev", 80), ("dev", 80)])
 
     def test_no_match(self):
         self.assertEqual(db_query.match_env_by_branch("master", ["stable"]), [])
@@ -320,6 +394,16 @@ class QueryOutputTest(unittest.TestCase):
         columns, duplicated = db_query.unique_columns(["id", "id", "name", "id"])
         self.assertEqual(columns, ["id", "id_1", "name", "id_2"])
         self.assertEqual(duplicated, ["id", "id"])
+
+    def test_unique_columns_skips_names_taken_by_real_columns(self):
+        columns, duplicated = db_query.unique_columns(["id", "id_1", "id"])
+        self.assertEqual(columns, ["id", "id_1", "id_2"])
+        self.assertEqual(duplicated, ["id"])
+
+    def test_unique_columns_no_collision_when_generated_name_already_real(self):
+        columns, duplicated = db_query.unique_columns(["id", "id", "id_1"])
+        self.assertEqual(columns, ["id", "id_1", "id_1_1"])
+        self.assertEqual(duplicated, ["id"])
 
     def test_rows_to_dicts_reports_duplicate_columns(self):
         class FakeCursor:
@@ -473,6 +557,38 @@ class ParamsValidationTest(unittest.TestCase):
             db_query.load_params('"abc"')
         with self.assertRaises(SystemExit):
             db_query.load_params("42")
+
+
+class LoadSqlTest(unittest.TestCase):
+    def test_missing_file_raises_input_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = str(Path(directory) / "no_such.sql")
+            with self.assertRaises(db_query.AiDbError) as ctx:
+                db_query.load_sql(SimpleNamespace(sql=None, file=missing))
+            self.assertEqual(ctx.exception.code, "INPUT_ERROR")
+
+    def test_invalid_utf8_file_raises_input_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bad.sql"
+            path.write_bytes(b"\xff\xfe\x00\x80")
+            with self.assertRaises(db_query.AiDbError) as ctx:
+                db_query.load_sql(SimpleNamespace(sql=None, file=str(path)))
+            self.assertEqual(ctx.exception.code, "INPUT_ERROR")
+
+
+class ParamsPresenceTest(unittest.TestCase):
+    def test_placeholder_without_params_rejected(self):
+        with self.assertRaises(db_query.AiDbError) as ctx:
+            db_query.validate_params_presence(
+                "select * from users where id = %s limit 1", None
+            )
+        self.assertEqual(ctx.exception.code, "INPUT_ERROR")
+
+    def test_placeholder_with_params_ok(self):
+        db_query.validate_params_presence("select * from users where id = %s limit 1", [1])
+
+    def test_percent_inside_string_is_not_placeholder(self):
+        db_query.validate_params_presence("select '%s' as note from users limit 1", None)
 
 
 class ConnectFallbackTest(unittest.TestCase):

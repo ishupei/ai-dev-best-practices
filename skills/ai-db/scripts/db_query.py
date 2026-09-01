@@ -231,31 +231,38 @@ def load_index_optional(store_dir: Path) -> dict[str, Any] | None:
 
 
 def env_summary_rows(store_dir: Path, index: dict[str, Any]) -> list[dict[str, Any]]:
-    """Build secret-free per-environment summaries for list-envs."""
+    """Build secret-free per-environment summaries for list-envs.
+
+    A single unreadable environment file must not fail the whole listing; its
+    summary carries an 'error' marker instead.
+    """
     rows: list[dict[str, Any]] = []
     default_env = index.get("default_env")
     for env, entry in index.get("environments", {}).items():
-        if isinstance(entry, str):
-            env_file = normalize_path(entry, store_dir)
-        else:
-            env_file = normalize_path(entry.get("file", ""), store_dir)
+        env_file = env_file_from_entry(store_dir, entry)
         summary: dict[str, Any] = {
             "env": env,
             "default": env == default_env,
-            "file": str(env_file),
-            "exists": env_file.exists(),
+            "file": str(env_file) if env_file is not None else None,
+            "exists": env_file is not None and env_file.exists(),
         }
-        if env_file.exists():
-            spec = read_json(env_file)
-            summary.update(
-                {
-                    "driver": spec.get("driver", "mysql"),
-                    "host": spec.get("host"),
-                    "port": spec.get("port", 3306),
-                    "database": spec.get("database"),
-                    "user": spec.get("user"),
-                }
-            )
+        if env_file is None:
+            summary["error"] = "invalid index entry"
+        elif env_file.exists():
+            try:
+                spec = read_json(env_file)
+            except AiDbError as exc:
+                summary["error"] = str(exc)
+            else:
+                summary.update(
+                    {
+                        "driver": spec.get("driver", "mysql"),
+                        "host": spec.get("host"),
+                        "port": spec.get("port", 3306),
+                        "database": spec.get("database"),
+                        "user": spec.get("user"),
+                    }
+                )
         rows.append(summary)
     return rows
 
@@ -340,17 +347,20 @@ def branch_match_candidates(branch: str) -> list[str]:
 def match_env_by_branch(branch: str, envs: list[str]) -> list[tuple[str, int]]:
     """Score configured env names against a git branch name.
 
-    Exact candidate match scores 100; one-side containment (length >= 3) scores 80.
-    Returns env names sorted by descending score, then descending name length.
+    Only an exact match of the full branch name scores 100 (the only case the
+    caller may adopt automatically); token-level or containment matches score 80
+    and remain candidates for confirmation. Returns env names sorted by
+    descending score, then descending name length.
     """
     candidates = branch_match_candidates(branch)
+    full_name = candidates[0] if candidates else ""
     scored: dict[str, int] = {}
     for env in envs:
         env_lower = env.lower()
         best = 0
         for cand in candidates:
-            if cand == env_lower:
-                best = max(best, 100)
+            if len(cand) >= MIN_MATCH_LEN and cand == env_lower:
+                best = max(best, 100 if cand == full_name else 80)
             else:
                 shorter, longer = (cand, env_lower) if len(cand) <= len(env_lower) else (env_lower, cand)
                 if len(shorter) >= MIN_MATCH_LEN and shorter in longer:
@@ -415,6 +425,15 @@ def spec_from_mysql_url(url: str) -> dict[str, Any]:
     return {k: v for k, v in spec.items() if v is not None}
 
 
+def env_file_from_entry(store_dir: Path, entry: Any) -> Path | None:
+    """Resolve the connection-file path of an index entry (str or {"file": ...})."""
+    if isinstance(entry, str):
+        return normalize_path(entry, store_dir)
+    if isinstance(entry, dict) and entry.get("file"):
+        return normalize_path(entry["file"], store_dir)
+    return None
+
+
 def load_env_spec(
     store_dir: Path, env: str, resolve_values: bool = True
 ) -> tuple[str, Path, dict[str, Any]]:
@@ -426,12 +445,8 @@ def load_env_spec(
     envs = index["environments"]
     if env_name not in envs:
         raise AiDbError(f"Environment not found: {env_name}", code="STORE_ERROR")
-    entry = envs[env_name]
-    if isinstance(entry, str):
-        path = normalize_path(entry, store_dir)
-    elif isinstance(entry, dict) and entry.get("file"):
-        path = normalize_path(entry["file"], store_dir)
-    else:
+    path = env_file_from_entry(store_dir, envs[env_name])
+    if path is None:
         raise AiDbError(f"Invalid index entry for environment: {env_name}", code="STORE_ERROR")
     spec = read_json(path)
     return env_name, path, resolve_env_values(spec) if resolve_values else spec
@@ -465,13 +480,12 @@ def ensure_mysql_spec(spec: dict[str, Any]) -> dict[str, Any]:
     result = dict(spec)
     result["driver"] = "mysql"
     raw_port = result.get("port", 3306)
-    if isinstance(raw_port, bool):
-        raise AiDbError("MySQL connection port must be an integer from 1 to 65535.", code="INPUT_ERROR")
     try:
         port = int(raw_port)
-    except (TypeError, ValueError) as exc:
-        raise AiDbError("MySQL connection port must be an integer from 1 to 65535.", code="INPUT_ERROR") from exc
-    if not 1 <= port <= 65535:
+        valid_port = not isinstance(raw_port, bool) and 1 <= port <= 65535
+    except (TypeError, ValueError):
+        valid_port = False
+    if not valid_port:
         raise AiDbError("MySQL connection port must be an integer from 1 to 65535.", code="INPUT_ERROR")
     result["port"] = port
     result.setdefault("charset", "utf8mb4")
@@ -564,7 +578,7 @@ def connect_mysql(spec: dict[str, Any]) -> Any:
 def normalized_sql(sql: str) -> str:
     sql = sql.strip()
     while True:
-        if sql.startswith("--"):
+        if sql.startswith("--") or sql.startswith("#"):
             _, _, rest = sql.partition("\n")
             sql = rest.lstrip()
             continue
@@ -578,14 +592,22 @@ def normalized_sql(sql: str) -> str:
     return sql
 
 
-def sql_for_guard(sql: str) -> tuple[str, bool]:
+def sql_for_guard(sql: str, keep_backticks: bool = False) -> tuple[str, bool]:
+    """Normalize SQL for guard checks: comments and quoted content are replaced
+    with spaces so keyword scans and LIMIT checks see only the statement skeleton.
+
+    With keep_backticks=True, backtick identifiers are preserved verbatim (for
+    table-name extraction) while string literals are still stripped, so neither
+    comment text nor string text can leak phantom table names into matches.
+    Returns the guarded text and whether an executable comment (/*! ... */) was found.
+    """
     result: list[str] = []
     idx = 0
     length = len(sql)
     while idx < length:
         char = sql[idx]
         nxt = sql[idx + 1] if idx + 1 < length else ""
-        if char == "-" and nxt == "-":
+        if (char == "-" and nxt == "-") or char == "#":
             idx = sql.find("\n", idx)
             if idx == -1:
                 break
@@ -602,19 +624,29 @@ def sql_for_guard(sql: str) -> tuple[str, bool]:
             continue
         if char in {"'", '"', "`"}:
             quote = char
-            result.append(" ")
+            keep = keep_backticks and quote == "`"
+            result.append(quote if keep else " ")
             idx += 1
             while idx < length:
                 current = sql[idx]
                 if current == "\\":
+                    if keep:
+                        result.append(current)
+                        if idx + 1 < length:
+                            result.append(sql[idx + 1])
                     idx += 2
                     continue
                 if current == quote:
+                    result.append(quote if keep else " ")
                     if quote == "'" and idx + 1 < length and sql[idx + 1] == "'":
+                        if keep:
+                            result.append("'")
                         idx += 2
                         continue
                     idx += 1
                     break
+                if keep:
+                    result.append(current)
                 idx += 1
             continue
         result.append(char.lower())
@@ -630,22 +662,31 @@ def is_query_only(sql: str) -> bool:
     if len(statements) != 1:
         return False
     statement = statements[0]
-    first = statement.split(None, 1)[0] if statement else ""
+    first = statement.split(None, 1)[0]
     if first not in QUERY_STARTERS:
         return False
-    tokens = set(re.findall(r"[a-z_]+", statement))
-    if tokens.intersection(MUTATING_TOKENS):
-        return False
+    # SHOW statements are read-only metadata queries (e.g. `show create table`),
+    # so their "create" variant must not trip the mutating-keyword check.
+    # EXPLAIN/DESCRIBE still need it (`explain delete from ...` is valid MySQL).
+    if first != "show":
+        tokens = set(re.findall(r"[a-z_]+", statement))
+        if tokens.intersection(MUTATING_TOKENS):
+            return False
     collapsed = re.sub(r"\s+", " ", statement)
     return not any(phrase in collapsed for phrase in MUTATING_PHRASES)
+
+
+def statement_and_first(statement: str) -> tuple[str, str]:
+    """Strip an SQL statement (trailing semicolon accepted) and its first token."""
+    statement = statement.strip().rstrip(";").strip()
+    return statement, statement.split(None, 1)[0] if statement else ""
 
 
 def validate_select_limit(sql: str, maximum: int) -> None:
     guarded, executable_comment = sql_for_guard(sql)
     if executable_comment:
         return
-    statement = guarded.strip().rstrip(";").strip()
-    first = statement.split(None, 1)[0] if statement else ""
+    statement, first = statement_and_first(guarded)
     if first != "select":
         return
     match = SELECT_LIMIT_PATTERN.search(statement)
@@ -653,7 +694,11 @@ def validate_select_limit(sql: str, maximum: int) -> None:
         raise AiDbError("SELECT queries must end with an explicit LIMIT no larger than --limit.", code="INPUT_ERROR")
     requested_limit = match.group(1)
     if requested_limit.isdigit() and int(requested_limit) > maximum:
-        raise AiDbError("SELECT LIMIT must not exceed --limit.", code="INPUT_ERROR")
+        raise AiDbError(
+            f"SELECT LIMIT must not exceed the effective limit of {maximum} rows; "
+            "lower the SQL LIMIT or pass --limit with a smaller value.",
+            code="INPUT_ERROR",
+        )
 
 
 def extract_sql_limit(sql: str) -> int | None:
@@ -662,8 +707,7 @@ def extract_sql_limit(sql: str) -> int | None:
     guarded, executable_comment = sql_for_guard(sql)
     if executable_comment:
         return None
-    statement = guarded.strip().rstrip(";").strip()
-    first = statement.split(None, 1)[0] if statement else ""
+    statement, first = statement_and_first(guarded)
     if first != "select":
         return None
     match = SELECT_LIMIT_PATTERN.search(statement)
@@ -676,18 +720,23 @@ def extract_sql_limit(sql: str) -> int | None:
 
 
 def extract_table_refs(sql: str) -> list[str]:
-    normalized = normalized_sql(sql)
-    first = normalized.split(None, 1)[0].lower() if normalized else ""
+    """Extract table names from FROM/JOIN/TABLE clauses and SHOW/DESCRIBE targets.
+
+    Comments and string literals are stripped first so their text cannot leak
+    phantom table names; backtick identifiers are preserved.
+    """
+    guarded = sql_for_guard(sql, keep_backticks=True)[0]
+    first = guarded.split(None, 1)[0] if guarded else ""
     if first == "show":
-        show_match = SHOW_TABLE_PATTERN.search(normalized)
+        show_match = SHOW_TABLE_PATTERN.search(guarded)
         if show_match:
             return [show_match.group(1).replace("`", "")]
         return ["<schema-metadata>"]
     result: list[str] = []
-    describe_match = DESCRIBE_PATTERN.search(normalized)
+    describe_match = DESCRIBE_PATTERN.search(guarded)
     if describe_match:
         result.append(describe_match.group(1).replace("`", ""))
-    for match in TABLE_REF_PATTERN.finditer(normalized):
+    for match in TABLE_REF_PATTERN.finditer(guarded):
         table = match.group(1).replace("`", "")
         if table not in result:
             result.append(table)
@@ -733,8 +782,27 @@ def load_sql(args: argparse.Namespace) -> str:
     if bool(args.sql) == bool(args.file):
         raise AiDbError("Specify exactly one of --sql or --file.", code="INPUT_ERROR")
     if args.file:
-        return Path(args.file).read_text(encoding="utf-8")
+        try:
+            return Path(args.file).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise AiDbError(f"Cannot read SQL file: {args.file}: {exc}", code="INPUT_ERROR") from exc
+        except UnicodeDecodeError as exc:
+            raise AiDbError(f"SQL file is not valid UTF-8: {args.file}", code="INPUT_ERROR") from exc
     return args.sql
+
+
+def validate_params_presence(sql: str, params: Any) -> None:
+    """Reject %s placeholders without --params as an input error.
+
+    Quoted content is stripped first, so a literal %s inside a string (for
+    example a LIKE pattern) is not mistaken for a placeholder.
+    """
+    guarded, _ = sql_for_guard(sql)
+    if "%s" in guarded and params is None:
+        raise AiDbError(
+            "SQL contains %s parameter placeholders but --params was not provided.",
+            code="INPUT_ERROR",
+        )
 
 
 def load_params(raw: str | None) -> Any:
@@ -769,20 +837,26 @@ def query_cursor(conn: Any) -> Any:
 def unique_columns(columns: list[str]) -> tuple[list[str], list[str]]:
     """Map duplicate column names to unique keys (id -> id, id_1, id_2, ...).
 
-    Returns the unique names and the original names that were duplicated, so the
-    caller can tell the user that join results with same-named columns were renamed.
+    Generated suffixes skip names already taken by real columns or earlier
+    renames, so a result that mixes duplicate columns with an existing column
+    named like a generated alias never collides and never loses data.
+    Returns the unique names and the original names that were duplicated.
     """
     counts: dict[str, int] = {}
+    used: set[str] = set()
     result: list[str] = []
     duplicated: list[str] = []
     for column in columns:
         count = counts.get(column, 0)
         counts[column] = count + 1
-        if count == 0:
-            result.append(column)
-        else:
-            result.append(f"{column}_{count}")
+        if count > 0:
             duplicated.append(column)
+        candidate = column if count == 0 else f"{column}_{count}"
+        while candidate in used:
+            count += 1
+            candidate = f"{column}_{count}"
+        used.add(candidate)
+        result.append(candidate)
     return result, duplicated
 
 
@@ -814,10 +888,10 @@ def render_table(rows: list[dict[str, Any]]) -> str:
         for col in columns:
             value = row.get(col)
             text = "" if value is None else str(value)
-            if len(text) > 200:
-                text = text[:197] + "..."
+            if len(text) > MAX_CELL_CHARS:
+                text = text[: MAX_CELL_CHARS - 3] + "..."
             rendered[col] = text
-            widths[col] = min(max(widths[col], len(text)), 200)
+            widths[col] = min(max(widths[col], len(text)), MAX_CELL_CHARS)
         rendered_rows.append(rendered)
     output.write(" | ".join(str(col).ljust(widths[col]) for col in columns) + "\n")
     output.write("-+-".join("-" * widths[col] for col in columns) + "\n")
@@ -947,29 +1021,28 @@ def command_resolve_env(args: argparse.Namespace) -> None:
             f"Environment store not initialized at {store_dir}. Run init-store first, "
             "then create-env with the connection info or use --direct-json."
         )
-        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
-        return
-    envs = sorted(index["environments"])
-    if args.prefer:
-        if args.prefer in index["environments"]:
-            payload.update({"method": "prefer", "env": args.prefer})
-            print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
-            return
-        payload["hint"] = f"Preferred environment '{args.prefer}' not found in the store."
-    branch = args.branch or git_current_branch()
-    payload["branch"] = branch
-    if branch:
-        matches = match_env_by_branch(branch, envs)
-        payload["matches"] = [{"env": env, "score": score} for env, score in matches]
-        exact = [(env, score) for env, score in matches if score == 100]
-        if len(exact) == 1:
-            payload.update({"method": "branch", "env": exact[0][0]})
-        elif matches:
-            payload["method"] = "branch-ambiguous"
-            payload["hint"] = (
-                "The git branch did not uniquely match one environment; pick from 'matches' "
-                "using session context or ask the user."
-            )
+    else:
+        envs = sorted(index["environments"])
+        if args.prefer:
+            if args.prefer in index["environments"]:
+                payload.update({"method": "prefer", "env": args.prefer})
+            else:
+                payload["hint"] = f"Preferred environment '{args.prefer}' not found in the store."
+        if payload["env"] is None:
+            branch = args.branch or git_current_branch()
+            payload["branch"] = branch
+            if branch:
+                matches = match_env_by_branch(branch, envs)
+                payload["matches"] = [{"env": env, "score": score} for env, score in matches]
+                exact = [env for env, score in matches if score == 100]
+                if len(exact) == 1:
+                    payload.update({"method": "branch", "env": exact[0]})
+                elif matches:
+                    payload["method"] = "branch-ambiguous"
+                    payload["hint"] = (
+                        "The git branch did not uniquely match one environment; pick from 'matches' "
+                        "using session context or ask the user."
+                    )
     if payload["env"] is None and payload["hint"] is None:
         payload["hint"] = (
             "No environment resolved. Ask the user for connection info "
@@ -1018,16 +1091,11 @@ def command_query(args: argparse.Namespace) -> None:
     sql = load_sql(args)
     if not is_query_only(sql):
         raise AiDbError("SQL is not recognized as query-only. ai-db query only runs SELECT/SHOW/EXPLAIN/DESCRIBE statements.", code="INPUT_ERROR")
-    if args.limit < 1:
-        raise AiDbError("--limit must be at least 1.", code="INPUT_ERROR")
-    if args.max_output_bytes < 1:
-        raise AiDbError("--max-output-bytes must be at least 1.", code="INPUT_ERROR")
+    for flag, value in (("--limit", args.limit), ("--max-output-bytes", args.max_output_bytes)):
+        if value < 1:
+            raise AiDbError(f"{flag} must be at least 1.", code="INPUT_ERROR")
     limit = min(args.limit, MAX_LIMIT)
     max_output_bytes = min(args.max_output_bytes, MAX_OUTPUT_BYTES)
-    validate_select_limit(sql, limit)
-    spec = ensure_mysql_spec(apply_database_override(spec, args.database))
-    tables = resolve_tables(sql, args.tables)
-    print_query_log(env_name, spec["database"], tables, sql, args.log_note)
     if args.limit > MAX_LIMIT:
         print(f"warning: --limit {args.limit} exceeds MAX_LIMIT={MAX_LIMIT}; using {limit}", file=sys.stderr)
     if args.max_output_bytes > MAX_OUTPUT_BYTES:
@@ -1036,11 +1104,17 @@ def command_query(args: argparse.Namespace) -> None:
             f"MAX_OUTPUT_BYTES={MAX_OUTPUT_BYTES}; using {max_output_bytes}",
             file=sys.stderr,
         )
+    validate_select_limit(sql, limit)
+    params = load_params(args.params)
+    validate_params_presence(sql, params)
+    spec = ensure_mysql_spec(apply_database_override(spec, args.database))
+    tables = resolve_tables(sql, args.tables)
+    print_query_log(env_name, spec["database"], tables, sql, args.log_note)
     conn = None
     try:
         conn = connect_mysql(spec)
         cur = query_cursor(conn)
-        cursor_execute(cur, sql, load_params(args.params))
+        cursor_execute(cur, sql, params)
         if cur.description:
             rows = cur.fetchmany(limit + 1)
             has_more = len(rows) > limit
@@ -1158,6 +1232,15 @@ def main() -> int:
             "then re-run this command.",
             code="SETUP_ERROR",
         )
+    # Keep structured output alive on legacy non-UTF-8 consoles (e.g. cp936 on
+    # Chinese Windows): replace undecodable characters instead of crashing.
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (OSError, ValueError):
+                pass
     parser = build_parser()
     try:
         args = parser.parse_args()
