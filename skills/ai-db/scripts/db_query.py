@@ -14,6 +14,7 @@ import importlib
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 
 DEFAULT_LIMIT = 100
+MAX_LIMIT = 5000
+MIN_MATCH_LEN = 3
 DEFAULT_DIR_NAME = "ai-db"
 INDEX_FILE_NAME = "environments.json"
 ENV_PATTERN = re.compile(r"^\$\{ENV:([A-Za-z_][A-Za-z0-9_]*)\}$")
@@ -123,6 +126,44 @@ def save_index(store_dir: Path, data: dict[str, Any]) -> None:
     write_json(index_path(store_dir), data)
 
 
+def load_index_optional(store_dir: Path) -> dict[str, Any] | None:
+    """Load the index without failing when it does not exist yet; returns None then."""
+    path = index_path(store_dir)
+    if not path.exists():
+        return None
+    return load_index(store_dir)
+
+
+def env_summary_rows(store_dir: Path, index: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build secret-free per-environment summaries shared by list-envs and status."""
+    rows: list[dict[str, Any]] = []
+    default_env = index.get("default_env")
+    for env, entry in index.get("environments", {}).items():
+        if isinstance(entry, str):
+            env_file = normalize_path(entry, store_dir)
+        else:
+            env_file = normalize_path(entry.get("file", ""), store_dir)
+        summary: dict[str, Any] = {
+            "env": env,
+            "default": env == default_env,
+            "file": str(env_file),
+            "exists": env_file.exists(),
+        }
+        if env_file.exists():
+            spec = read_json(env_file)
+            summary.update(
+                {
+                    "driver": spec.get("driver", "mysql"),
+                    "host": spec.get("host"),
+                    "port": spec.get("port", 3306),
+                    "database": spec.get("database"),
+                    "user": spec.get("user"),
+                }
+            )
+        rows.append(summary)
+    return rows
+
+
 def resolve_env_values(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: resolve_env_values(v) for k, v in value.items()}
@@ -159,6 +200,68 @@ def normalize_path(path: str | Path, base: Path) -> Path:
     if raw.is_absolute():
         return raw
     return base / raw
+
+
+def git_current_branch() -> str | None:
+    """Return the current git branch in the working directory, or None when unavailable."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    branch = proc.stdout.strip()
+    if not branch or branch == "HEAD":
+        return None
+    return branch
+
+
+def branch_match_candidates(branch: str) -> list[str]:
+    """Expand a git branch name into candidate strings for env-name matching.
+
+    Produces the full branch name, tokens split on separators, and the compact
+    alphanumeric form, e.g. "release/18beta.1-dev" -> ["release/18beta.1-dev",
+    "release", "18beta", "dev", "18beta1dev"].
+    """
+    lowered = branch.strip().lower()
+    candidates = [lowered] if lowered else []
+    for token in re.split(r"[^a-z0-9]+", lowered):
+        if len(token) >= MIN_MATCH_LEN:
+            candidates.append(token)
+    compact = re.sub(r"[^a-z0-9]+", "", lowered)
+    if len(compact) >= MIN_MATCH_LEN:
+        candidates.append(compact)
+    seen: set[str] = set()
+    return [c for c in candidates if not (c in seen or seen.add(c))]
+
+
+def match_env_by_branch(branch: str, envs: list[str]) -> list[tuple[str, int]]:
+    """Score configured env names against a git branch name.
+
+    Exact candidate match scores 100; one-side containment (length >= 3) scores 80.
+    Returns env names sorted by descending score, then descending name length.
+    """
+    candidates = branch_match_candidates(branch)
+    scored: dict[str, int] = {}
+    for env in envs:
+        env_lower = env.lower()
+        best = 0
+        for cand in candidates:
+            if cand == env_lower:
+                best = max(best, 100)
+            else:
+                shorter, longer = (cand, env_lower) if len(cand) <= len(env_lower) else (env_lower, cand)
+                if len(shorter) >= MIN_MATCH_LEN and shorter in longer:
+                    best = max(best, 80)
+        if best:
+            scored[env] = best
+    return sorted(scored.items(), key=lambda item: (-item[1], -len(item[0])))
 
 
 def mysql_template(env: str) -> dict[str, Any]:
@@ -228,7 +331,11 @@ def load_env_spec(store_dir: Path, env: str) -> tuple[str, Path, dict[str, Any]]
 def get_spec(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
     sources = [bool(args.env), bool(args.direct_json), bool(args.url)]
     if sum(sources) != 1:
-        raise SystemExit("Specify exactly one connection source: --env, --direct-json, or --url.")
+        raise SystemExit(
+            "Specify exactly one connection source: --env, --direct-json, or --url. "
+            "When no environment is known, run the 'resolve-env' command to infer one "
+            "from session context or the git branch, or run 'status' to inspect the store."
+        )
     if args.env:
         env_name, _, spec = load_env_spec(Path(args.store_dir), args.env)
         return env_name, spec
@@ -271,6 +378,16 @@ def require_module(module_name: str, install_hint: str) -> Any:
         raise SystemExit(f"Missing Python driver '{module_name}'. Install package: {install_hint}") from exc
 
 
+def driver_install_hint() -> str:
+    """pip command for the MySQL driver that matches this Python version.
+
+    pymysql 2.x requires Python 3.9+; the 1.x series still supports 3.7/3.8.
+    """
+    if sys.version_info >= (3, 9):
+        return "pip install pymysql"
+    return 'pip install "pymysql>=1.1,<2"'
+
+
 def connect_mysql(spec: dict[str, Any]) -> Any:
     spec = ensure_mysql_spec(spec)
     kwargs = {
@@ -293,6 +410,11 @@ def connect_mysql(spec: dict[str, Any]) -> Any:
         kwargs.pop("cursorclass", None)
         return pymysql.connect(**kwargs)
     except ImportError:
+        print(
+            f"pymysql is not installed; falling back to mysql.connector. "
+            f"To use pymysql, run: {driver_install_hint()}",
+            file=sys.stderr,
+        )
         mysql_connector = require_module("mysql.connector", "mysql-connector-python")
         kwargs.pop("cursorclass", None)
         return mysql_connector.connect(**kwargs)
@@ -415,7 +537,7 @@ def sql_summary(sql: str) -> str:
     return compact
 
 
-def print_query_log(env_name: str, database: str, tables: list[str], sql: str, note: str | None) -> None:
+def print_query_log(env_name: str, database: str, tables: list[str], sql: str, note: str | None, host: str | None = None) -> None:
     payload = {
         "event": "ai-db-query-log",
         "env": env_name,
@@ -423,6 +545,8 @@ def print_query_log(env_name: str, database: str, tables: list[str], sql: str, n
         "tables": tables,
         "summary": sql_summary(sql),
     }
+    if host:
+        payload["host"] = host
     if note:
         payload["note"] = note
     print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
@@ -527,31 +651,89 @@ def command_create_env(args: argparse.Namespace) -> None:
 def command_list_envs(args: argparse.Namespace) -> None:
     store_dir = Path(args.store_dir)
     index = load_index(store_dir)
-    rows = []
-    for env, entry in index.get("environments", {}).items():
-        if isinstance(entry, str):
-            env_file = normalize_path(entry, store_dir)
-        else:
-            env_file = normalize_path(entry.get("file", ""), store_dir)
-        summary: dict[str, Any] = {
-            "env": env,
-            "default": env == index.get("default_env"),
-            "file": str(env_file),
-            "exists": env_file.exists(),
-        }
-        if env_file.exists():
-            spec = read_json(env_file)
-            summary.update(
-                {
-                    "driver": spec.get("driver", "mysql"),
-                    "host": spec.get("host"),
-                    "port": spec.get("port", 3306),
-                    "database": spec.get("database"),
-                    "user": spec.get("user"),
-                }
+    print_rows(env_summary_rows(store_dir, index), args.format)
+
+
+def command_resolve_env(args: argparse.Namespace) -> None:
+    """Decide which environment to use: explicit context preference first, then git branch.
+
+    Emits a JSON decision (never guesses): method=prefer|branch|branch-ambiguous|none,
+    env when uniquely resolved, matched candidates, and the full env summary list.
+    """
+    store_dir = Path(args.store_dir)
+    index = load_index_optional(store_dir)
+    payload: dict[str, Any] = {
+        "method": "none",
+        "env": None,
+        "branch": None,
+        "prefer": args.prefer,
+        "matches": [],
+        "environments": [],
+        "hint": None,
+    }
+    if index is None:
+        payload["hint"] = (
+            f"Environment store not initialized at {store_dir}. Run init-store first, "
+            "then create-env with the connection info or use --direct-json."
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        return
+    envs = sorted(index["environments"])
+    payload["environments"] = env_summary_rows(store_dir, index)
+    if args.prefer:
+        if args.prefer in index["environments"]:
+            payload.update({"method": "prefer", "env": args.prefer})
+            print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+            return
+        payload["hint"] = f"Preferred environment '{args.prefer}' not found in the store."
+    branch = args.branch or git_current_branch()
+    payload["branch"] = branch
+    if branch:
+        matches = match_env_by_branch(branch, envs)
+        payload["matches"] = [{"env": env, "score": score} for env, score in matches]
+        exact = [(env, score) for env, score in matches if score == 100]
+        if len(exact) == 1:
+            payload.update({"method": "branch", "env": exact[0][0]})
+        elif matches:
+            payload["method"] = "branch-ambiguous"
+            payload["hint"] = (
+                "The git branch did not uniquely match one environment; pick from 'matches' "
+                "using session context or ask the user."
             )
-        rows.append(summary)
-    print_rows(rows, args.format)
+    if payload["env"] is None and payload["hint"] is None:
+        payload["hint"] = (
+            "No environment resolved. Ask the user for connection info "
+            "(host/port/database/user/password or a connection JSON), then create-env or use --direct-json."
+        )
+    print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+
+
+def command_status(args: argparse.Namespace) -> None:
+    """One-shot environment judgment for skill load: store state, git branch, resolved envs."""
+    store_dir = Path(args.store_dir)
+    index = load_index_optional(store_dir)
+    payload: dict[str, Any] = {
+        "store_dir": str(store_dir),
+        "initialized": index is not None,
+        "git_branch": args.branch or git_current_branch(),
+        "default_env": None,
+        "branch_env": None,
+        "environments": [],
+        "hint": None,
+    }
+    if index is None:
+        payload["hint"] = (
+            f"Store not initialized at {store_dir}. Run: python <db-query> init-store"
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        return
+    payload["default_env"] = index.get("default_env")
+    payload["environments"] = env_summary_rows(store_dir, index)
+    if payload["git_branch"]:
+        matches = match_env_by_branch(payload["git_branch"], sorted(index["environments"]))
+        if matches:
+            payload["branch_env"] = [{"env": env, "score": score} for env, score in matches]
+    print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
 
 
 def command_show_env(args: argparse.Namespace) -> None:
@@ -595,17 +777,20 @@ def command_query(args: argparse.Namespace) -> None:
         raise SystemExit("SQL is not recognized as query-only. ai-db query only runs SELECT/SHOW/EXPLAIN/DESCRIBE statements.")
     spec = ensure_mysql_spec(apply_database_override(spec, args.database))
     tables = resolve_tables(sql, args.tables)
-    print_query_log(env_name, spec["database"], tables, sql, args.log_note)
+    print_query_log(env_name, spec["database"], tables, sql, args.log_note, spec.get("host"))
+    limit = max(0, min(args.limit, MAX_LIMIT))
+    if args.limit > MAX_LIMIT:
+        print(f"warning: --limit {args.limit} exceeds MAX_LIMIT={MAX_LIMIT}; using {limit}", file=sys.stderr)
     conn = None
     try:
         conn = connect_mysql(spec)
         cur = conn.cursor()
         cursor_execute(cur, sql, load_params(args.params))
         if cur.description:
-            rows = cur.fetchmany(args.limit)
+            rows = cur.fetchmany(limit)
             result = rows_to_dicts(cur, rows)
             print_rows(result, args.format)
-            print(f"\n-- env={env_name} driver=mysql rows={len(result)} limit={args.limit}", file=sys.stderr)
+            print(f"-- env={env_name} database={spec['database']} driver=mysql rows={len(result)} limit={limit}", file=sys.stderr)
         else:
             conn.rollback()
             raise SystemExit("Query completed without a result set; ai-db does not run data-changing statements.")
@@ -651,6 +836,20 @@ def build_parser() -> argparse.ArgumentParser:
     list_envs.add_argument("--format", choices=["table", "json", "csv"], default="table")
     list_envs.set_defaults(func=command_list_envs)
 
+    resolve_env = sub.add_parser(
+        "resolve-env",
+        help="Decide which environment to use: explicit context preference first, then git branch inference.",
+    )
+    add_store_arg(resolve_env)
+    resolve_env.add_argument("--prefer", help="Environment previously used or inferred in this session context.")
+    resolve_env.add_argument("--branch", help="Git branch name to infer from; defaults to auto-detection in the current directory.")
+    resolve_env.set_defaults(func=command_resolve_env)
+
+    status = sub.add_parser("status", help="One-shot environment judgment: store state, git branch, and env summary.")
+    add_store_arg(status)
+    status.add_argument("--branch", help="Git branch name to infer from; defaults to auto-detection in the current directory.")
+    status.set_defaults(func=command_status)
+
     show_env = sub.add_parser("show-env", help="Show one environment with secrets redacted.")
     add_store_arg(show_env)
     show_env.add_argument("--env", required=True, help="Environment name, or @default.")
@@ -682,6 +881,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    if sys.version_info < (3, 7):
+        raise SystemExit(
+            "Python 3.7+ is required to run the ai-db CLI. Install Python 3.7 or newer "
+            "(Windows mirror: https://mirrors.huaweicloud.com/python/, tick 'Add python.exe to PATH'), "
+            "then re-run this command."
+        )
     parser = build_parser()
     args = parser.parse_args()
     args.func(args)

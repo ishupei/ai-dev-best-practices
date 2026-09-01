@@ -1,79 +1,55 @@
 ---
 name: ai-db
-description: "显式 MySQL 数据库查询与调用链辅助。当用户输入 /ai-db、$ai-db，或其他 skill/AI 调用链明确要求使用 ai-db 时触发；支持本地 JSON 环境存储、自定义环境名如 18beta.1-dev/stable、每个环境独立连接 JSON、MySQL 连通性测试和查询类 SQL 执行；调用链使用时必须先从工程模块、上下文、实体类或明确输入确定主库和表名，无法确定时中断，且以只查询不增删改为第一原则。"
+description: "显式 MySQL 查询辅助。当用户输入 /ai-db、$ai-db，或其他 skill/AI 调用链明确要求使用 ai-db 时触发；只查询不增删改；主库和表名必须从代码、上下文、实体或用户输入确定，无法确定时中断。"
 ---
 
 # AI DB
 
-此技能给 AI 或其他 skill 的调用链使用，用于在显式授权下查询 MySQL。
-默认存储目录为 `%USERPROFILE%\.config\ai-db\`（macOS/Linux 为 `~/.config/ai-db/`），
-可通过 `AI_DB_DIR` 或 `--store-dir` 覆盖。
+给 AI 或其他 skill 调用链在显式授权下查询 MySQL。脚本入口 `<ai-db-skill>/scripts/db_query.py`（下称 `<db-query>`）；Windows 必须用 `scripts/python_probe.ps1` 代替 `python <db-query>`。
 
-## 渐进式披露
+## 强制快速路由
 
-- 执行普通查询、列环境、建环境时，只需要本文件和 `scripts/db_query.py`。
-- 需要了解环境 JSON 结构、目录布局或示例时，再读取 `references/config-format.md`。
-- 不要把真实连接配置、密码或大批量查询结果写入对话、文档或仓库。
-- 不要在方案或回答中写死本机 skill 安装路径；调用脚本时从当前已加载的 `ai-db` skill 根目录解析 `scripts/db_query.py`。
+多意图并存时按 查询 > 测试 > 环境管理 > 环境修复 处理；任何动作前 MUST 选择且只选择一个路由。必须复用会话已确认的环境/库/表；信息不足只追问当前路由必需项，禁止读参考文档代替澄清、禁止扫描无关内容。
 
-## 原则与边界
+首次使用或上下文无任何环境信息时，必须先运行一次 `status`（只读 store 与 git，不触网不连库）再进入对应路由。
 
-- 只有显式调用 `/ai-db`、`$ai-db` 或调用链明确要求 `ai-db` 时才使用。
-- 默认只考虑 MySQL；其他数据库暂不处理，不要主动扩展。
-- 不要编造环境、库名、表名、账号或密码；缺失时使用 `create-env` 生成模板，或要求调用方提供连接 JSON。
-- 调用链使用时以查询为第一原则，只做查询和元数据查看，不做新增、删除、修改、DDL、锁表、导出文件或批量变更。
-- 查询前必须确定主库和表名。优先依据工程模块、上下文、实体类、Mapper/DAO/Repository、SQL XML/注解、配置或用户明确输入；如果无法确定，直接中断并说明缺少哪些依据，拒绝猜测性处理。
-- 环境名允许自定义，例如 `18beta.1-dev`、`stable`、`uat_2`；每个环境必须关联一个独立 JSON 连接配置。
-- `init-store`、`create-env`、`set-default` 等环境存储写操作必须串行执行，不要在同一个 store 上并行写索引。
-- 输出连接信息时必须脱敏；不要输出完整连接 JSON。
-- 显式调用后，每次执行 `query` 都必须在 AI 调用日志或脚本日志中打印库名、表名和简要查询日志；`scripts/db_query.py query` 会向 stderr 输出 `ai-db-query-log`。
+1. **环境判定**（未显式指定连接源时）：按「环境选择优先级」执行，唯一命中前禁止执行查询。
+2. **连通性测试**：直接 `test --env <name>`，读取输出 `ok` 字段；上下文已有该环境成功连通/查询记录时跳过，除非调用方明确要求测试。
+3. **查询/元数据**：按「主库与表名标定」确定库和表，禁止猜测 → 小步验证仅首次需要（`test` → `show tables`/`describe`），上下文已有该环境成功连通/查询记录时跳过 → `query`（必须传 `--database`/`--tables`/`--log-note`，默认 `--limit 100`）。
+4. **环境管理**：`init-store`/`create-env`/`list-envs`/`show-env`/`set-default`；写操作必须串行，禁止并行写索引。
+5. **环境修复**：Python/驱动/连接异常时按脚本报错自我优化；无法解决时读 `references/setup.md`。
 
-## 调用链工作流
+## 环境选择优先级
 
-1. 解析脚本路径：`db_query = <当前 ai-db skill 根目录>/scripts/db_query.py`。下文 `<db-query>` 均指这个运行时解析出的实际路径，不是要照抄的固定字符串。
-2. 明确目标：环境管理、连通性测试、查元数据或查业务数据。
-3. 确定主库和表名：
-   - 先从用户输入、工程模块名、包名、实体类、Mapper/DAO/Repository、SQL XML/注解、配置文件和既有上下文定位业务域。
-   - 在环境配置含 `business_databases` 时，主库必须从该列表中选定；不能仅凭名称相似猜测。
-   - 表名必须来自实体映射、SQL、表结构查询结果或用户明确输入；不能凭字段名或业务词猜。
-   - 如果主库或表名任一无法确认，中断本次数据库查询，输出缺失依据和下一步需要读取的工程文件或用户确认项。
-4. 如调用方未指定环境，先执行 `list-envs`；存在默认环境时可使用 `--env @default`。
-5. 如果环境不存在，使用 `create-env --env <name>` 创建模板，等待调用方补齐真实连接信息。
-6. 查询前优先小步验证：
-   - `test --env <name>` 验证连接。
-   - `query --env <name> --sql "show tables" --limit 50` 或 `describe <table>` 验证结构。
-7. 执行业务查询 SQL，默认限制 `--limit 100`；如果目标库不是环境默认库，必须传 `--database <已确定主库>`；必须传 `--tables <已确定表名>` 和 `--log-note <简要目的>` 以形成调用日志。
-8. 失败时先自我优化，再决定是否询问调用方：
-   - 环境不存在：列出已有环境，建议创建或切换环境。
-   - 连接失败：检查 host、port、database、user、密码环境变量和 MySQL 驱动。
-   - 表/字段不存在：用 `show tables`、`describe <table>` 收敛 SQL。
-   - 语法失败：按 MySQL 方言重写 SQL，避免跨库函数。
-   - 权限不足、需要增删改或语义不确定：停止并说明需要调用方确认，不能用 `query` 命令执行变更。
+未显式指定连接源（`--env`/`--direct-json`/`--url`）时，必须按序判定，唯一命中即停止：
 
-## 常用命令
+1. 上下文曾指定或推断 → `resolve-env --prefer <env>` 校验。
+2. git 分支精确匹配 → `resolve-env`（仅包含关系一律视为候选，禁止自动采用）。
+3. 兜底 → 打印 `list-envs`，向用户索要连接信息（`create-env --from-json` 或 `--direct-json`）；多候选必须按业务域上下文收敛，仍无法确定必须询问用户，禁止自行挑选。
 
-```powershell
-python <db-query> init-store
-python <db-query> create-env --env 18beta.1-dev
-python <db-query> list-envs
-python <db-query> show-env --env stable
-python <db-query> set-default --env stable
-python <db-query> test --env stable
-python <db-query> query --env stable --database stable_esign6_docs --tables doc_table --log-note "按实体映射查询文档记录" --sql "select * from doc_table limit 1"
-```
+## 主库与表名标定
 
-## 直连
+未显式指定库/表时，以会话上下文与当前工作工程为显式标定依据，按下列来源顺序命中，命中即停止，禁止猜测：
 
-调用链临时连接 MySQL 时可不落环境。有密码时优先用 `--direct-json`，因为连接 JSON 支持 `${ENV:NAME}` 展开；URL 只适合不含敏感信息的临时连接。
+- **库名**：工程名/模块名 → 配置文件数据源（`application.yml`/`bootstrap.yml` 的 datasource、jdbc url）→ 环境 JSON 的 `business_databases`（存在时主库必须从中选定）→ 上下文已确认的库。
+- **表名**：实体类 DO/entity/PO（类名驼峰转下划线，或 `@TableName`/`@Table` 注解）→ Mapper/DAO/Repository 与 SQL XML/注解中的表引用 → 上下文已确认的表。
+- 依据不足时：小步验证（`show tables`/`describe`）收敛；仍无法确定必须中断并说明缺失依据。
 
-```powershell
-python <db-query> query --direct-json "{\"driver\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3306,\"database\":\"app\",\"user\":\"root\",\"password\":\"${ENV:MYSQL_PASSWORD}\"}" --database app --tables users --log-note "按实体映射抽样查询用户" --sql "select * from users limit 1"
-python <db-query> query --url "mysql://user@127.0.0.1:3306/app" --database app --tables users --log-note "按实体映射抽样查询用户" --sql "select * from users limit 1"
-```
+## 绝对边界
+
+- 只查询：禁止 DDL/DML/锁表/导出文件/批量变更；`query` 无写覆盖参数。
+- 禁止编造环境、库、表、账号、密码；主库/表名无法从代码、上下文、实体或用户输入确定时，必须中断并说明缺失依据。
+- 输出连接信息必须脱敏；禁止把密码、完整连接 JSON 或大批量结果写入对话、文档、仓库。
+- 禁止在方案中写死本机 skill 安装路径。
 
 ## 输出要求
 
-- 说明环境名、目标库、SQL 目的、行数限制和查询性质。
-- 每次 `query` 的日志必须包含：库名、表名、简要查询日志；优先使用脚本输出的 `ai-db-query-log`。
-- 查询成功时只给必要字段和少量结果；需要完整导出时让调用方明确范围。
-- 查询失败时给错误类型、已尝试的自我优化步骤和下一步最小可执行动作。
+- 必须声明本次实际使用的环境/库/表、SQL 目的与行数限制，引用本次脚本输出（stderr 的 `-- env=... database=... rows=...` 确认行与 `ai-db-query-log`），禁止凭记忆复述。
+- 成功只给必要字段与少量结果；需要完整导出时必须让调用方明确范围。
+- 失败必须输出错误类型、已执行的自我优化步骤、下一步最小可执行动作。
+
+## 延迟读取
+
+- 环境 JSON 结构、目录布局、命令全集、直连示例：`references/config-format.md`
+- Python/驱动安装、国内镜像、`AI_DB_PYTHON`/`AI_DB_DIR` 环境变量：`references/setup.md`
+- 常规查询、列环境、建环境时禁止读取以上文件。
