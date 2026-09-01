@@ -66,8 +66,9 @@ description: "显式 MySQL 查询辅助。当用户输入 /ai-db、$ai-db，或�
 - 成功只给必要字段与少量结果；需要完整导出时必须让调用方明确范围。
 - `SELECT` 必须以不超过 `--limit` 的显式 `LIMIT` 结束；`query` 默认最多返回 20 行和 64KiB stdout。`ai-db-result.has_more` 或 `output_truncated` 为 `true` 时，必须说明结果不完整并让调用方缩小范围后重试。
 - 返回行数等于 `--limit` 时禁止断言“无更多数据”：SQL 自带的 `LIMIT` 会在服务器端先截断，`fetchmany(limit+1)` 探测因此失效，`has_more` 恒为 `false`。必须核对 `ai-db-result.sql_limit`（`null` 表示参数化 LIMIT 或非 SELECT），必要时执行 `count(*)` 或缩小范围确认实际规模。
+- `ai-db-result.duplicate_columns` 非空时，说明结果中同名列已被重命名（如 `id` → `id_1`），输出字段不完整对应原表列；应建议调用方为 join 列显式加别名后再查询。
 - 输出变更 SQL 草案时，必须重复“仅供人工审核和执行，ai-db 未执行”的标识，并给出影响范围或“需确认”。
-- 失败必须输出错误类型、已执行的自我优化步骤、下一步最小可执行动作。
+- 失败必须输出错误类型、已执行的自我优化步骤、下一步最小可执行动作；`ai-db-error.code` 取值为 `INPUT_ERROR`（参数/SQL 问题）、`CONNECTION_ERROR`（MySQL 连接或执行失败）、`SETUP_ERROR`（Python/驱动/环境变量缺失）、`STORE_ERROR`（环境存储文件或锁问题）、`COMMAND_FAILED`（其他），按错误码选择自我优化方向。
 
 ## 延迟读取
 

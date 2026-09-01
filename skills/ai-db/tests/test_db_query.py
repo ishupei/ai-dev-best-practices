@@ -183,6 +183,14 @@ class ResolveTablesTest(unittest.TestCase):
     def test_show_uses_schema_metadata_placeholder(self):
         self.assertEqual(db_query.resolve_tables("show tables", None), ["<schema-metadata>"])
 
+    def test_show_with_table_extracts_name(self):
+        self.assertEqual(db_query.extract_table_refs("show create table users"), ["users"])
+        self.assertEqual(db_query.extract_table_refs("show create view user_stats"), ["user_stats"])
+        self.assertEqual(db_query.extract_table_refs("show full columns from orders"), ["orders"])
+        self.assertEqual(db_query.extract_table_refs("show fields from orders"), ["orders"])
+        self.assertEqual(db_query.extract_table_refs("show index from `users`"), ["users"])
+        self.assertEqual(db_query.extract_table_refs("show tables"), ["<schema-metadata>"])
+
     def test_describe_extracts_table(self):
         self.assertEqual(db_query.resolve_tables("describe users", None), ["users"])
 
@@ -308,6 +316,19 @@ class QueryOutputTest(unittest.TestCase):
         self.assertEqual(result, [{"id": 1}, {"id": 2}])
         self.assertTrue(truncated)
 
+    def test_unique_columns_renames_duplicates(self):
+        columns, duplicated = db_query.unique_columns(["id", "id", "name", "id"])
+        self.assertEqual(columns, ["id", "id_1", "name", "id_2"])
+        self.assertEqual(duplicated, ["id", "id"])
+
+    def test_rows_to_dicts_reports_duplicate_columns(self):
+        class FakeCursor:
+            description = [("id",), ("id",)]
+
+        result, duplicated = db_query.rows_to_dicts(FakeCursor(), [(1, 2)])
+        self.assertEqual(result, [{"id": 1, "id_1": 2}])
+        self.assertEqual(duplicated, ["id"])
+
     def test_query_reports_more_rows_and_output_budget(self):
         class FakeCursor:
             description = [("id",)]
@@ -352,7 +373,50 @@ class QueryOutputTest(unittest.TestCase):
         self.assertIn('"has_more": true', stderr.getvalue())
         self.assertIn('"output_truncated": false', stderr.getvalue())
         self.assertIn('"sql_limit": 2', stderr.getvalue())
+        self.assertIn('"duplicate_columns": []', stderr.getvalue())
         self.assertTrue(connection.closed)
+
+    def test_query_reports_duplicate_columns(self):
+        class FakeCursor:
+            description = [("id",), ("id",)]
+
+            def execute(self, sql, params=None):
+                pass
+
+            def fetchmany(self, limit):
+                return [(1, 2)]
+
+        class FakeConnection:
+            def __init__(self):
+                self.cursor_instance = FakeCursor()
+                self.closed = False
+
+            def cursor(self):
+                return self.cursor_instance
+
+            def close(self):
+                self.closed = True
+
+        connection = FakeConnection()
+        args = SimpleNamespace(
+            limit=20,
+            max_output_bytes=65536,
+            database=None,
+            tables="users",
+            log_note="join sample",
+            format="json",
+            params=None,
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with patch("db_query.get_spec", return_value=("stable", {"host": "h", "database": "app", "user": "u"})), patch(
+            "db_query.load_sql", return_value="select u.id, o.id from users u join orders o limit 2"
+        ), patch("db_query.connect_mysql", return_value=connection), contextlib.redirect_stdout(
+            stdout
+        ), contextlib.redirect_stderr(stderr):
+            db_query.command_query(args)
+        self.assertEqual(json.loads(stdout.getvalue()), [{"id": 1, "id_1": 2}])
+        self.assertIn('"duplicate_columns": ["id"]', stderr.getvalue())
 
 
 class MainErrorOutputTest(unittest.TestCase):
@@ -368,6 +432,47 @@ class MainErrorOutputTest(unittest.TestCase):
             exit_code = db_query.main()
         self.assertEqual(exit_code, 1)
         self.assertIn('"event": "ai-db-error"', stderr.getvalue())
+        self.assertIn('"code": "INPUT_ERROR"', stderr.getvalue())
+
+    def test_usage_errors_emit_structured_input_error(self):
+        stderr = io.StringIO()
+        with patch.object(sys, "argv", ["db_query.py"]), contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as ctx:
+                db_query.main()
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn('"event": "ai-db-error"', stderr.getvalue())
+        self.assertIn('"code": "INPUT_ERROR"', stderr.getvalue())
+
+    def test_connection_failures_carry_connection_error_code(self):
+        args = SimpleNamespace(
+            limit=20,
+            max_output_bytes=65536,
+            database=None,
+            tables="users",
+            log_note="sample",
+            format="json",
+            params=None,
+        )
+        stderr = io.StringIO()
+        with patch("db_query.get_spec", return_value=("stable", {"host": "h", "database": "app", "user": "u"})), patch(
+            "db_query.load_sql", return_value="select id from users limit 2"
+        ), patch("db_query.connect_mysql", side_effect=RuntimeError("connection refused")), contextlib.redirect_stderr(
+            stderr
+        ):
+            with self.assertRaises(db_query.AiDbError) as ctx:
+                db_query.command_query(args)
+        self.assertEqual(ctx.exception.code, "CONNECTION_ERROR")
+
+
+class ParamsValidationTest(unittest.TestCase):
+    def test_params_type_validated(self):
+        self.assertIsNone(db_query.load_params(None))
+        self.assertEqual(db_query.load_params("[1, 2]"), [1, 2])
+        self.assertEqual(db_query.load_params('{"a": 1}'), {"a": 1})
+        with self.assertRaises(SystemExit):
+            db_query.load_params('"abc"')
+        with self.assertRaises(SystemExit):
+            db_query.load_params("42")
 
 
 class ConnectFallbackTest(unittest.TestCase):

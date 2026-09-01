@@ -122,12 +122,22 @@ either bound truncates output. `ai-db-result.sql_limit` carries the literal `LIM
 value of the SELECT (or `null` for a parameterized `LIMIT %s` / non-SELECT statements):
 when `rows` equals `limit`, the server-side `LIMIT` may hide more rows and
 `has_more` cannot detect them, so verify with `count(*)` before claiming completeness.
+`ai-db-result.duplicate_columns` lists original column names that appeared more than
+once and were renamed with a `_1`/`_2` suffix in the output; prefer explicit column
+aliases in the SQL to avoid this.
 
 SQL shape limits (conservative by design): the statement must start with
 `select`/`show`/`explain`/`describe`/`desc`; CTE (`WITH ...`), parenthesized queries,
 and the two-argument `LIMIT <offset>, <count>` form are rejected — rewrite them as a
 single trailing `LIMIT <count> [OFFSET <offset>]` on the outermost level without
-changing the query semantics.
+changing the query semantics. `SHOW` variants that name a table (`show create table`,
+`show full columns from`, `show index from`, ...) extract the table name automatically;
+plain `show tables` still reports `<schema-metadata>`.
+
+Every failure prints a single `ai-db-error` JSON line on stderr with a stable `code`:
+`INPUT_ERROR` (bad arguments/SQL), `CONNECTION_ERROR` (MySQL connect or execute
+failure), `SETUP_ERROR` (missing Python/driver/env var), `STORE_ERROR` (environment
+store file or lock), `COMMAND_FAILED` (other).
 
 Resolve `<db-query>` from the current loaded `ai-db` skill root:
 `<ai-db-skill>/scripts/db_query.py`. Do not hard-code a user-specific skill

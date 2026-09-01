@@ -76,6 +76,43 @@ DESCRIBE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 SELECT_LIMIT_PATTERN = re.compile(r"\blimit\s+(\d+|%s)(?:\s+offset\s+\d+)?\s*$", re.IGNORECASE)
+SHOW_TABLE_PATTERN = re.compile(
+    r"^\s*show\s+(?:create\s+(?:table|view)|(?:full\s+)?(?:columns|fields|index|keys)\s+from)\s+"
+    r"(`?[A-Za-z0-9_$][A-Za-z0-9_$-]*`?(?:\.`?[A-Za-z0-9_$][A-Za-z0-9_$-]*`?)?)",
+    re.IGNORECASE,
+)
+
+
+class AiDbError(SystemExit):
+    """SystemExit carrying a stable machine-readable error code for AI callers.
+
+    Codes: INPUT_ERROR (bad arguments/SQL), CONNECTION_ERROR (MySQL failures),
+    SETUP_ERROR (missing Python/driver/env var), STORE_ERROR (environment store
+    problems), COMMAND_FAILED (anything else).
+    """
+
+    def __init__(self, message: str, code: str = "COMMAND_FAILED"):
+        super().__init__(message)
+        self.code = code
+
+
+class StructuredArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser that reports usage errors as structured ai-db-error JSON."""
+
+    def error(self, message: str) -> None:
+        print(
+            json.dumps(
+                {
+                    "event": "ai-db-error",
+                    "code": "INPUT_ERROR",
+                    "message": message,
+                    "action": "Fix the command-line arguments and retry.",
+                },
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
 
 def default_store_dir() -> Path:
@@ -92,15 +129,16 @@ def index_path(store_dir: Path) -> Path:
 
 def validate_env_name(name: str) -> None:
     if not ENV_NAME_PATTERN.match(name):
-        raise SystemExit(
+        raise AiDbError(
             "Invalid env name. Use 1-128 chars: letters, digits, dot, underscore, hyphen; "
-            "the first char must be a letter or digit."
+            "the first char must be a letter or digit.",
+            code="INPUT_ERROR",
         )
 
 
 def validate_identifier(value: str, label: str) -> None:
     if not IDENTIFIER_PATTERN.match(value):
-        raise SystemExit(f"Invalid {label}: {value}")
+        raise AiDbError(f"Invalid {label}: {value}", code="INPUT_ERROR")
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -108,11 +146,11 @@ def read_json(path: Path) -> dict[str, Any]:
         with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError as exc:
-        raise SystemExit(f"JSON file not found: {path}") from exc
+        raise AiDbError(f"JSON file not found: {path}", code="STORE_ERROR") from exc
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"Invalid JSON file: {path}: {exc}") from exc
+        raise AiDbError(f"Invalid JSON file: {path}: {exc}", code="STORE_ERROR") from exc
     if not isinstance(data, dict):
-        raise SystemExit(f"JSON root must be an object: {path}")
+        raise AiDbError(f"JSON root must be an object: {path}", code="STORE_ERROR")
     return data
 
 
@@ -154,7 +192,7 @@ def store_write_lock(store_dir: Path):
             except FileNotFoundError:
                 continue
             if time.monotonic() >= deadline:
-                raise SystemExit("Environment store is busy. Retry the write command shortly.")
+                raise AiDbError("Environment store is busy. Retry the write command shortly.", code="STORE_ERROR")
             time.sleep(0.05)
     try:
         yield
@@ -171,12 +209,12 @@ def load_index(store_dir: Path, create: bool = False) -> dict[str, Any]:
     if not path.exists():
         if create:
             return {"default_env": None, "environments": {}}
-        raise SystemExit(f"Environment index not found: {path}. Run init-store first.")
+        raise AiDbError(f"Environment index not found: {path}. Run init-store first.", code="STORE_ERROR")
     data = read_json(path)
     data.setdefault("default_env", None)
     data.setdefault("environments", {})
     if not isinstance(data["environments"], dict):
-        raise SystemExit("Index field 'environments' must be an object.")
+        raise AiDbError("Index field 'environments' must be an object.", code="STORE_ERROR")
     return data
 
 
@@ -232,7 +270,7 @@ def resolve_env_values(value: Any) -> Any:
         if match:
             name = match.group(1)
             if name not in os.environ:
-                raise SystemExit(f"Required environment variable is not set: {name}")
+                raise AiDbError(f"Required environment variable is not set: {name}", code="SETUP_ERROR")
             return os.environ[name]
     return value
 
@@ -343,9 +381,9 @@ def parse_json_object(raw: str, label: str) -> dict[str, Any]:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"Invalid {label} JSON: {exc}") from exc
+        raise AiDbError(f"Invalid {label} JSON: {exc}", code="INPUT_ERROR") from exc
     if not isinstance(data, dict):
-        raise SystemExit(f"{label} must be a JSON object.")
+        raise AiDbError(f"{label} must be a JSON object.", code="INPUT_ERROR")
     return data
 
 
@@ -353,7 +391,7 @@ def spec_from_mysql_url(url: str) -> dict[str, Any]:
     parsed = urlparse(url)
     scheme = parsed.scheme.lower()
     if scheme not in {"mysql", "mariadb"}:
-        raise SystemExit("Only mysql:// or mariadb:// URLs are supported.")
+        raise AiDbError("Only mysql:// or mariadb:// URLs are supported.", code="INPUT_ERROR")
     query = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
     if parsed.password is not None:
         print(
@@ -364,7 +402,7 @@ def spec_from_mysql_url(url: str) -> dict[str, Any]:
     try:
         port = parsed.port or 3306
     except ValueError as exc:
-        raise SystemExit(f"Invalid MySQL URL port: {exc}") from exc
+        raise AiDbError(f"Invalid MySQL URL port: {exc}", code="INPUT_ERROR") from exc
     spec: dict[str, Any] = {
         "driver": "mysql",
         "host": parsed.hostname,
@@ -383,18 +421,18 @@ def load_env_spec(
     index = load_index(store_dir)
     env_name = index.get("default_env") if env == "@default" else env
     if not env_name:
-        raise SystemExit("Default environment is not configured.")
+        raise AiDbError("Default environment is not configured.", code="STORE_ERROR")
     validate_env_name(env_name)
     envs = index["environments"]
     if env_name not in envs:
-        raise SystemExit(f"Environment not found: {env_name}")
+        raise AiDbError(f"Environment not found: {env_name}", code="STORE_ERROR")
     entry = envs[env_name]
     if isinstance(entry, str):
         path = normalize_path(entry, store_dir)
     elif isinstance(entry, dict) and entry.get("file"):
         path = normalize_path(entry["file"], store_dir)
     else:
-        raise SystemExit(f"Invalid index entry for environment: {env_name}")
+        raise AiDbError(f"Invalid index entry for environment: {env_name}", code="STORE_ERROR")
     spec = read_json(path)
     return env_name, path, resolve_env_values(spec) if resolve_values else spec
 
@@ -402,10 +440,11 @@ def load_env_spec(
 def get_spec(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
     sources = [bool(args.env), bool(args.direct_json), bool(args.url)]
     if sum(sources) != 1:
-        raise SystemExit(
+        raise AiDbError(
             "Specify exactly one connection source: --env, --direct-json, or --url. "
             "When no environment is known, run the 'resolve-env' command to infer one "
-            "from session context or the git branch."
+            "from session context or the git branch.",
+            code="INPUT_ERROR",
         )
     if args.env:
         env_name, _, spec = load_env_spec(Path(args.store_dir), args.env)
@@ -418,33 +457,33 @@ def get_spec(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
 def ensure_mysql_spec(spec: dict[str, Any]) -> dict[str, Any]:
     driver = str(spec.get("driver", "mysql")).lower()
     if driver not in {"mysql", "mariadb"}:
-        raise SystemExit(f"Unsupported driver: {driver}. ai-db currently supports MySQL only.")
+        raise AiDbError(f"Unsupported driver: {driver}. ai-db currently supports MySQL only.", code="INPUT_ERROR")
     required = ["host", "database", "user"]
     missing = [field for field in required if not spec.get(field)]
     if missing:
-        raise SystemExit(f"MySQL connection is missing required field(s): {', '.join(missing)}")
+        raise AiDbError(f"MySQL connection is missing required field(s): {', '.join(missing)}", code="INPUT_ERROR")
     result = dict(spec)
     result["driver"] = "mysql"
     raw_port = result.get("port", 3306)
     if isinstance(raw_port, bool):
-        raise SystemExit("MySQL connection port must be an integer from 1 to 65535.")
+        raise AiDbError("MySQL connection port must be an integer from 1 to 65535.", code="INPUT_ERROR")
     try:
         port = int(raw_port)
     except (TypeError, ValueError) as exc:
-        raise SystemExit("MySQL connection port must be an integer from 1 to 65535.") from exc
+        raise AiDbError("MySQL connection port must be an integer from 1 to 65535.", code="INPUT_ERROR") from exc
     if not 1 <= port <= 65535:
-        raise SystemExit("MySQL connection port must be an integer from 1 to 65535.")
+        raise AiDbError("MySQL connection port must be an integer from 1 to 65535.", code="INPUT_ERROR")
     result["port"] = port
     result.setdefault("charset", "utf8mb4")
     for field in ("connect_timeout", "read_timeout", "write_timeout"):
         value = result.get(field)
         if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0):
-            raise SystemExit(f"MySQL connection {field} must be a positive number.")
+            raise AiDbError(f"MySQL connection {field} must be a positive number.", code="INPUT_ERROR")
     options = result.get("options")
     if options is None:
         result["options"] = {}
     elif not isinstance(options, dict):
-        raise SystemExit("MySQL connection options must be an object.")
+        raise AiDbError("MySQL connection options must be an object.", code="INPUT_ERROR")
     return result
 
 
@@ -454,7 +493,7 @@ def apply_database_override(spec: dict[str, Any], database: str | None) -> dict[
     validate_identifier(database, "database")
     allowed = spec.get("business_databases")
     if isinstance(allowed, list) and allowed and database not in allowed:
-        raise SystemExit(f"Database is not configured in business_databases: {database}")
+        raise AiDbError(f"Database is not configured in business_databases: {database}", code="INPUT_ERROR")
     result = dict(spec)
     result["database"] = database
     return result
@@ -464,7 +503,7 @@ def require_module(module_name: str, install_hint: str) -> Any:
     try:
         return importlib.import_module(module_name)
     except ImportError as exc:
-        raise SystemExit(f"Missing Python driver '{module_name}'. Install package: {install_hint}") from exc
+        raise AiDbError(f"Missing Python driver '{module_name}'. Install package: {install_hint}", code="SETUP_ERROR") from exc
 
 
 def driver_install_hint() -> str:
@@ -611,10 +650,10 @@ def validate_select_limit(sql: str, maximum: int) -> None:
         return
     match = SELECT_LIMIT_PATTERN.search(statement)
     if not match:
-        raise SystemExit("SELECT queries must end with an explicit LIMIT no larger than --limit.")
+        raise AiDbError("SELECT queries must end with an explicit LIMIT no larger than --limit.", code="INPUT_ERROR")
     requested_limit = match.group(1)
     if requested_limit.isdigit() and int(requested_limit) > maximum:
-        raise SystemExit("SELECT LIMIT must not exceed --limit.")
+        raise AiDbError("SELECT LIMIT must not exceed --limit.", code="INPUT_ERROR")
 
 
 def extract_sql_limit(sql: str) -> int | None:
@@ -640,6 +679,9 @@ def extract_table_refs(sql: str) -> list[str]:
     normalized = normalized_sql(sql)
     first = normalized.split(None, 1)[0].lower() if normalized else ""
     if first == "show":
+        show_match = SHOW_TABLE_PATTERN.search(normalized)
+        if show_match:
+            return [show_match.group(1).replace("`", "")]
         return ["<schema-metadata>"]
     result: list[str] = []
     describe_match = DESCRIBE_PATTERN.search(normalized)
@@ -656,14 +698,14 @@ def resolve_tables(sql: str, explicit_tables: str | None) -> list[str]:
     if explicit_tables:
         tables = [item.strip() for item in explicit_tables.split(",") if item.strip()]
         if not tables:
-            raise SystemExit("--tables was provided but no table name was found.")
+            raise AiDbError("--tables was provided but no table name was found.", code="INPUT_ERROR")
     else:
         tables = extract_table_refs(sql)
     for table in tables:
         if table != "<schema-metadata>":
             validate_identifier(table, "table")
     if not tables:
-        raise SystemExit("Unable to determine table name from SQL. Pass --tables after determining it from code/context/entity classes.")
+        raise AiDbError("Unable to determine table name from SQL. Pass --tables after determining it from code/context/entity classes.", code="INPUT_ERROR")
     return tables
 
 
@@ -689,7 +731,7 @@ def print_query_log(env_name: str, database: str, tables: list[str], sql: str, n
 
 def load_sql(args: argparse.Namespace) -> str:
     if bool(args.sql) == bool(args.file):
-        raise SystemExit("Specify exactly one of --sql or --file.")
+        raise AiDbError("Specify exactly one of --sql or --file.", code="INPUT_ERROR")
     if args.file:
         return Path(args.file).read_text(encoding="utf-8")
     return args.sql
@@ -699,9 +741,15 @@ def load_params(raw: str | None) -> Any:
     if not raw:
         return None
     try:
-        return json.loads(raw)
+        data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"Invalid --params JSON: {exc}") from exc
+        raise AiDbError(f"Invalid --params JSON: {exc}", code="INPUT_ERROR") from exc
+    if not isinstance(data, (list, dict)):
+        raise AiDbError(
+            "--params must be a JSON array or object for driver parameter binding.",
+            code="INPUT_ERROR",
+        )
+    return data
 
 
 def cursor_execute(cur: Any, sql: str, params: Any) -> None:
@@ -718,17 +766,40 @@ def query_cursor(conn: Any) -> Any:
         return conn.cursor()
 
 
-def rows_to_dicts(cur: Any, rows: list[Any]) -> list[dict[str, Any]]:
-    columns = [col[0] for col in cur.description]
-    return [
-        {
-            columns[idx]: value[: MAX_CELL_CHARS - 3] + "..."
-            if isinstance(value, str) and len(value) > MAX_CELL_CHARS
-            else value
-            for idx, value in enumerate(row)
-        }
-        for row in rows
-    ]
+def unique_columns(columns: list[str]) -> tuple[list[str], list[str]]:
+    """Map duplicate column names to unique keys (id -> id, id_1, id_2, ...).
+
+    Returns the unique names and the original names that were duplicated, so the
+    caller can tell the user that join results with same-named columns were renamed.
+    """
+    counts: dict[str, int] = {}
+    result: list[str] = []
+    duplicated: list[str] = []
+    for column in columns:
+        count = counts.get(column, 0)
+        counts[column] = count + 1
+        if count == 0:
+            result.append(column)
+        else:
+            result.append(f"{column}_{count}")
+            duplicated.append(column)
+    return result, duplicated
+
+
+def rows_to_dicts(cur: Any, rows: list[Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    columns, duplicated = unique_columns([col[0] for col in cur.description])
+    return (
+        [
+            {
+                columns[idx]: value[: MAX_CELL_CHARS - 3] + "..."
+                if isinstance(value, str) and len(value) > MAX_CELL_CHARS
+                else value
+                for idx, value in enumerate(row)
+            }
+            for row in rows
+        ],
+        duplicated,
+    )
 
 
 def render_table(rows: list[dict[str, Any]]) -> str:
@@ -783,6 +854,7 @@ def print_result_log(
     has_more: bool,
     output_truncated: bool,
     sql_limit: int | None,
+    duplicate_columns: list[str],
 ) -> None:
     payload = {
         "event": "ai-db-result",
@@ -793,6 +865,7 @@ def print_result_log(
         "has_more": has_more,
         "output_truncated": output_truncated,
         "sql_limit": sql_limit,
+        "duplicate_columns": duplicate_columns,
     }
     print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
 
@@ -820,7 +893,7 @@ def command_create_env(args: argparse.Namespace) -> None:
             spec = mysql_template(args.env)
         spec = ensure_mysql_spec(spec)
         if env_path.exists() and not args.force:
-            raise SystemExit(f"Environment file already exists: {env_path}. Use --force to overwrite.")
+            raise AiDbError(f"Environment file already exists: {env_path}. Use --force to overwrite.", code="STORE_ERROR")
         previous_env = env_path.read_bytes() if env_path.exists() else None
         env_written = False
         try:
@@ -917,7 +990,7 @@ def command_set_default(args: argparse.Namespace) -> None:
         validate_env_name(args.env)
         index = load_index(store_dir)
         if args.env not in index["environments"]:
-            raise SystemExit(f"Environment not found: {args.env}")
+            raise AiDbError(f"Environment not found: {args.env}", code="STORE_ERROR")
         index["default_env"] = args.env
         save_index(store_dir, index)
     print(json.dumps({"default_env": args.env}, ensure_ascii=False))
@@ -934,7 +1007,7 @@ def command_test(args: argparse.Namespace) -> None:
         row = cur.fetchone()
         print(json.dumps({"env": env_name, "ok": True, "result": list(row) if row else None}, ensure_ascii=False))
     except Exception as exc:
-        raise SystemExit(f"MySQL connection test failed: {exc}") from None
+        raise AiDbError(f"MySQL connection test failed: {exc}", code="CONNECTION_ERROR") from None
     finally:
         if conn is not None:
             conn.close()
@@ -944,11 +1017,11 @@ def command_query(args: argparse.Namespace) -> None:
     env_name, spec = get_spec(args)
     sql = load_sql(args)
     if not is_query_only(sql):
-        raise SystemExit("SQL is not recognized as query-only. ai-db query only runs SELECT/SHOW/EXPLAIN/DESCRIBE statements.")
+        raise AiDbError("SQL is not recognized as query-only. ai-db query only runs SELECT/SHOW/EXPLAIN/DESCRIBE statements.", code="INPUT_ERROR")
     if args.limit < 1:
-        raise SystemExit("--limit must be at least 1.")
+        raise AiDbError("--limit must be at least 1.", code="INPUT_ERROR")
     if args.max_output_bytes < 1:
-        raise SystemExit("--max-output-bytes must be at least 1.")
+        raise AiDbError("--max-output-bytes must be at least 1.", code="INPUT_ERROR")
     limit = min(args.limit, MAX_LIMIT)
     max_output_bytes = min(args.max_output_bytes, MAX_OUTPUT_BYTES)
     validate_select_limit(sql, limit)
@@ -971,7 +1044,7 @@ def command_query(args: argparse.Namespace) -> None:
         if cur.description:
             rows = cur.fetchmany(limit + 1)
             has_more = len(rows) > limit
-            result = rows_to_dicts(cur, rows)
+            result, duplicate_columns = rows_to_dicts(cur, rows)
             result = result[:limit]
             result, output_truncated = fit_rows_to_output_budget(result, args.format, max_output_bytes)
             has_more = has_more or output_truncated
@@ -984,14 +1057,15 @@ def command_query(args: argparse.Namespace) -> None:
                 has_more,
                 output_truncated,
                 extract_sql_limit(sql),
+                duplicate_columns,
             )
         else:
             conn.rollback()
-            raise SystemExit("Query completed without a result set; ai-db does not run data-changing statements.")
+            raise AiDbError("Query completed without a result set; ai-db does not run data-changing statements.", code="INPUT_ERROR")
     except SystemExit:
         raise
     except Exception as exc:
-        raise SystemExit(f"MySQL query failed after ai-db-query-log: {exc}") from None
+        raise AiDbError(f"MySQL query failed after ai-db-query-log: {exc}", code="CONNECTION_ERROR") from None
     finally:
         if conn is not None:
             conn.close()
@@ -1009,7 +1083,7 @@ def add_source_args(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="MySQL query helper using an ai-db multi-environment store.")
+    parser = StructuredArgumentParser(description="MySQL query helper using an ai-db multi-environment store.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     init_store = sub.add_parser("init-store", help="Create the environment store and index.")
@@ -1078,16 +1152,31 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     if sys.version_info < (3, 7):
-        raise SystemExit(
+        raise AiDbError(
             "Python 3.7+ is required to run the ai-db CLI. Install Python 3.7 or newer "
             "(Windows mirror: https://mirrors.huaweicloud.com/python/, tick 'Add python.exe to PATH'), "
-            "then re-run this command."
+            "then re-run this command.",
+            code="SETUP_ERROR",
         )
     parser = build_parser()
     try:
         args = parser.parse_args()
         args.func(args)
         return 0
+    except AiDbError as exc:
+        print(
+            json.dumps(
+                {
+                    "event": "ai-db-error",
+                    "code": exc.code,
+                    "message": str(exc),
+                    "action": "Fix the input or follow the command in message, then retry.",
+                },
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+        return 1
     except SystemExit as exc:
         if isinstance(exc.code, str):
             print(
