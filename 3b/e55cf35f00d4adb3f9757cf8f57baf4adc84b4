@@ -1,0 +1,22 @@
+skills/ai-db/SKILL.md
+  h_c93c98e603be80 3,8-43,47-55
+skills/ai-db/references/config-format.md
+  h_c93c98e603be80 5-8,51,91-109,113-117,125-128,139-140
+skills/ai-db/references/setup.md
+  h_c93c98e603be80 1-65
+skills/ai-db/scripts/db_query.py
+  h_c93c98e603be80 17,25-26,129-166,205-266,334-338,381-390,413-417,540,548-549,654-701,703-736,780-783,790,793,839-852,884-889
+skills/ai-db/scripts/python_probe.ps1
+  h_c93c98e603be80 1-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "3be55cf35f00d4adb3f9757cf8f57baf4adc84b4",
+  "prompts": {},
+  "humans": {
+    "h_c93c98e603be80": {
+      "author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
