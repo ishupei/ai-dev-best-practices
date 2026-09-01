@@ -1,0 +1,20 @@
+skills/ai-db/SKILL.md
+  h_c93c98e603be80 69,71
+skills/ai-db/references/config-format.md
+  h_c93c98e603be80 125-127,133-140
+skills/ai-db/scripts/db_query.py
+  h_c93c98e603be80 79-115,132,134-135,141,149,151,153,195,212,217,273,384,386,394,405,424,428,435,443,446-447,460,464,469,473,475,481,486,496,506,653,656,682-684,701,708,734,744,746-752,769-802,857,868,896,993,1010,1020,1022,1024,1047,1060,1064,1068,1086,1155,1158-1159,1166-1179
+skills/ai-db/tests/test_db_query.py
+  h_c93c98e603be80 186-193,319-331,376,379-420,435-475
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ff01624f9318fbb370f5b52be825cecfb6b771ab",
+  "prompts": {},
+  "humans": {
+    "h_c93c98e603be80": {
+      "author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
