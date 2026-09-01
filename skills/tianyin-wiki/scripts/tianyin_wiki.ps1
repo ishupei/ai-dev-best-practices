@@ -12,7 +12,7 @@ function Test-Python3 {
         [string[]] $PrefixArgs = @()
     )
     try {
-        & $Executable @PrefixArgs -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)" *> $null
+        & $Executable @PrefixArgs -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" *> $null
         return $LASTEXITCODE -eq 0
     } catch {
         return $false
@@ -40,7 +40,7 @@ if (-not $PythonExe) {
 }
 
 if (-not $PythonExe) {
-    Write-Error "Python 3.9+ is required before running Tianyin Wiki CLI. Install Python first, then re-run this command. On Windows, prefer installing the official Python launcher so `py -3` works."
+    Write-Error "Python 3.8+ is required before running Tianyin Wiki CLI. Install Python first, then re-run this command. On Windows, prefer installing the official Python launcher so `py -3` works. Slow from python.org? Use a China mirror: https://mirrors.huaweicloud.com/python/ (tick 'Add python.exe to PATH' during install)."
     exit 1
 }
 

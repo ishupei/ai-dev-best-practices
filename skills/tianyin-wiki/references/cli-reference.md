@@ -168,7 +168,7 @@ python .\scripts\tianyin_wiki.py prepare-paste-html --input .\outputs\detail-des
 python .\scripts\tianyin_wiki.py doctor --input .\outputs\detail-design.md
 ```
 
-Windows 可优先使用启动器，它会先选择可用 Python 3.9+；未发现时直接要求安装：
+Windows 可优先使用启动器，它会先选择可用 Python 3.8+；未发现时直接要求安装：
 
 ```powershell
 .\scripts\tianyin_wiki.ps1 doctor --input .\outputs\detail-design.md

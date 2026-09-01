@@ -6,23 +6,28 @@
 
 | 用途 | 依赖 | 安装/探测方式 |
 |---|---|---|
-| Python 启动 | Python 3.9+ | 必须前置安装；Windows 用 `.\scripts\tianyin_wiki.ps1` 启动器自动选择（见下） |
+| Python 启动 | Python 3.8+ | 必须前置安装；Windows 用 `.\scripts\tianyin_wiki.ps1` 启动器自动选择（见下） |
 | Markdown 解析 | `markdown-it-py`（>= 3，唯一第三方依赖，自动携带纯 Python 小包 `mdurl`） | 渲染层基于 CommonMark/GFM AST 解析，必须安装；无任何编译环节，安装即用 |
 | Mermaid 渲染 | `mmdc` 或 `npx` + Chrome/Edge | 首次安装时直接全局装好 `mmdc`（命令见下）；脚本按 `PATH` 自动探测 `mmdc`，缺失时回退 `npx --yes @mermaid-js/mermaid-cli` |
 | Mermaid 浏览器 | Chrome/Edge | 脚本会自动探测常见 Chrome/Edge 安装路径并注入 `PUPPETEER_EXECUTABLE_PATH`；未装或非标准路径时手动设置该环境变量 |
 
-### 国内网络安装加速
+### 首次安装加速（国内网络）
 
-`markdown-it-py` 与 `mdurl` 均为纯 Python 小包（合计约 150 KB，无二进制编译）；国内网络直连 PyPI 缓慢或失败时使用镜像源（清华 TUNA 或阿里云），命令等效：
+**1. Python 解释器**：python.org 直连下载缓慢或失败时，从国内镜像下载（文件与官方一致，安装时勾选 *Add python.exe to PATH*）：
+
+- 目录页：华为云 `https://mirrors.huaweicloud.com/python/`、阿里云 `https://mirrors.aliyun.com/python-release/windows/`
+- 直链（实测可达）：推荐 `https://mirrors.huaweicloud.com/python/3.12.8/python-3.12.8-amd64.exe`（3.12.8 仍在维护期）；最低要求 3.8+，3.9.13 及以上版本均可（`https://mirrors.huaweicloud.com/python/3.9.13/python-3.9.13-amd64.exe`）
+
+**2. 依赖 `markdown-it-py`**：直连 PyPI 缓慢或失败时用镜像源；执行一次持久化配置后，后续所有 pip 安装免 `-i`：
 
 ```powershell
-pip install markdown-it-py -i https://pypi.tuna.tsinghua.edu.cn/simple
-pip install markdown-it-py -i https://mirrors.aliyun.com/pypi/simple/
+pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+pip install markdown-it-py
 ```
 
-技能不自动切换 pip 源，也不内置/打包任何第三方代码（避免版本漂移与安全风险）；CLI 在缺少依赖时会直接给出上述安装命令。
+`markdown-it-py` 与 `mdurl` 均为纯 Python 小包（合计约 150 KB，无二进制编译），安装即用。技能不自动切换 pip 源，也不内置/打包任何第三方代码（避免版本漂移与安全风险）；CLI 在缺少依赖时会直接给出上述镜像安装命令。
 
-Windows 统一通过启动器执行，它会跳过 Microsoft Store 占位程序；若未发现 Python 3.9+，会直接要求先安装：
+Windows 统一通过启动器执行，它会跳过 Microsoft Store 占位程序；若未发现 Python 3.8+，会直接要求先安装：
 
 ```powershell
 .\scripts\tianyin_wiki.ps1 doctor --input .\outputs\detail-design.md

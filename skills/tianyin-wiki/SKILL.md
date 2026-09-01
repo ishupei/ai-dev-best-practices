@@ -5,7 +5,7 @@ description: 生成或更新天印基线/1-N 详设 Markdown；仅在用户明�
 
 # Tianyin Wiki
 
-入口：本 SKILL.md 同目录 `scripts/tianyin_wiki.py`，Windows 用 `scripts/tianyin_wiki.ps1` 代替（自动选择 Python 3.9+）。**所有命令均为该脚本的 CLI 子命令，不在系统 PATH 中查找**；执行形式 `python <本文件所在目录>/scripts/tianyin_wiki.py <command> [args]`。参考文档 `.\scripts\tianyin_wiki.py` 的 `.\` 均指本 skill 目录。
+入口：本 SKILL.md 同目录 `scripts/tianyin_wiki.py`，Windows 用 `scripts/tianyin_wiki.ps1` 代替（自动选择 Python 3.8+）。**所有命令均为该脚本的 CLI 子命令，不在系统 PATH 中查找**；执行形式 `python <本文件所在目录>/scripts/tianyin_wiki.py <command> [args]`。参考文档 `.\scripts\tianyin_wiki.py` 的 `.\` 均指本 skill 目录。
 
 ## 强制快速路由
 
@@ -23,7 +23,7 @@ description: 生成或更新天印基线/1-N 详设 Markdown；仅在用户明�
 
 - 除环境修复外严禁 `doctor`；除远程路由外严禁访问 Confluence。
 - 严禁无关工作区/Git 扫描，除非用户明确要求。
-- 远程写入须同时具备：用户明确确认、目标 `remote-url`/配置、Python 3.9+、Wiki `username`/`password`；任一缺失即停止。
+- 远程写入须同时具备：用户明确确认、目标 `remote-url`/配置、Python 3.8+、Wiki `username`/`password`；任一缺失即停止。
 - 严禁读取、导出或回显密码、Authorization 或其他凭据。
 - 本地 Markdown 是唯一事实源。默认 `raw` 不校验结构；配置文件 `template` 为 `baseline`/`1-n` 时按其校验（`lint-doc` 结构缺失 exit 1，发布仅提示）；raw 直推可显式 `--template raw` 关闭。
 
