@@ -1,0 +1,16 @@
+sync-skills.ps1
+  h_c93c98e603be80 9-10,13,137-168,209,221,243,255
+sync-skills.sh
+  h_c93c98e603be80 9-10,13,104-134,183,197,217,220,252
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f56328a249f2b237a676f1ab752504123cc48ab0",
+  "prompts": {},
+  "humans": {
+    "h_c93c98e603be80": {
+      "author": "jiming <jiming@tsign.cn>"
+    }
+  }
+}
